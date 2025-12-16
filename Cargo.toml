@@ -1,0 +1,12 @@
+[package]
+name = "rust-project"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+z3 = "0.12"
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+
+[build-dependencies]
