@@ -7,9 +7,9 @@
 use crate::expressions::{BinOp, ConstValue, SymExpr, UnOp};
 use crate::manager::{SymExManager, TypeInfo};
 use std::cmp::Ordering;
-use std::convert::{From, TryFrom};
+use std::convert::TryFrom;
 use std::fmt;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
+use std::ops::{BitAnd, BitOr, BitXor};
 use std::sync::{Arc, Mutex};
 
 thread_local! {
@@ -97,820 +97,8 @@ pub fn reset_branch_tracking() {
     PATH_UNSATISFIABLE.with(|u| *u.borrow_mut() = false);
 }
 
-/// Symbolic unsigned 64-bit integer type
-///
-/// This type implements the same traits as u64 while building symbolic
-/// expressions during execution. It maintains a reference to the global
-/// SymExManager for constraint tracking.
-#[derive(Clone)]
-pub struct SymU64 {
-    /// Unique symbolic variable identifier
-    variable_name: String,
-    /// Symbolic expression representing this value
-    expr: SymExpr,
-    /// Optional concrete value for concolic execution
-    concrete_value: Option<u64>,
-    /// Reference to the global symbolic execution manager
-    manager: Arc<Mutex<SymExManager>>,
-}
-
-impl SymU64 {
-    /// Create a new symbolic u64 with a fresh variable name
-    pub fn new(manager: Arc<Mutex<SymExManager>>) -> Self {
-        let variable_name = {
-            let mgr = manager.lock().unwrap();
-            mgr.fresh_variable("u64")
-        };
-
-        let expr = SymExpr::Variable(variable_name.clone());
-
-        // Register the variable with the manager
-        {
-            let mut mgr = manager.lock().unwrap();
-            let type_info = TypeInfo {
-                type_name: "u64".to_string(),
-                bit_width: Some(64),
-                is_signed: false,
-                creation_site: None,
-            };
-            let _ = mgr.register_variable(variable_name.clone(), type_info);
-        }
-
-        Self {
-            variable_name,
-            expr,
-            concrete_value: None,
-            manager,
-        }
-    }
-
-    /// Create a new symbolic u64 using the global thread-local manager
-    pub fn new_global() -> Self {
-        let manager = crate::get_global_manager().expect("Failed to get global manager");
-        Self::new(manager)
-    }
-
-    /// Create a new symbolic u64 with a specific variable name
-    pub fn with_name(name: String, manager: Arc<Mutex<SymExManager>>) -> Self {
-        let expr = SymExpr::Variable(name.clone());
-
-        // Register the variable with the manager
-        {
-            let mut mgr = manager.lock().unwrap();
-            let type_info = TypeInfo {
-                type_name: "u64".to_string(),
-                bit_width: Some(64),
-                is_signed: false,
-                creation_site: None,
-            };
-            let _ = mgr.register_variable(name.clone(), type_info);
-        }
-
-        Self {
-            variable_name: name,
-            expr,
-            concrete_value: None,
-            manager,
-        }
-    }
-
-    /// Create a symbolic u64 from a concrete value
-    pub fn from_concrete(value: u64, manager: Arc<Mutex<SymExManager>>) -> Self {
-        let variable_name = {
-            let mgr = manager.lock().unwrap();
-            mgr.fresh_variable("u64")
-        };
-
-        let expr = SymExpr::Constant(ConstValue::U64(value));
-
-        Self {
-            variable_name,
-            expr,
-            concrete_value: Some(value),
-            manager,
-        }
-    }
-
-    /// Create a symbolic u64 from an existing expression
-    pub fn from_expr(expr: SymExpr, manager: Arc<Mutex<SymExManager>>) -> Self {
-        let variable_name = {
-            let mgr = manager.lock().unwrap();
-            mgr.fresh_variable("u64")
-        };
-
-        Self {
-            variable_name,
-            expr,
-            concrete_value: None,
-            manager,
-        }
-    }
-
-    /// Get the symbolic expression representing this value
-    pub fn expr(&self) -> &SymExpr {
-        &self.expr
-    }
-
-    /// Get the variable name
-    pub fn variable_name(&self) -> &str {
-        &self.variable_name
-    }
-
-    /// Get the concrete value if available
-    pub fn concrete_value(&self) -> Option<u64> {
-        self.concrete_value
-    }
-
-    /// Set the concrete value (for concolic execution updates)
-    pub fn set_concrete_value(&mut self, value: u64) {
-        self.concrete_value = Some(value);
-    }
-
-    /// Update concrete value from a model (for concolic execution)
-    /// Returns true if the value was updated
-    pub fn update_from_model(&mut self, model: &crate::solver::Model) -> bool {
-        if let Some(value) = model.get_u64(&self.variable_name) {
-            self.concrete_value = Some(value);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get a reference to the manager
-    pub fn manager(&self) -> Arc<Mutex<SymExManager>> {
-        Arc::clone(&self.manager)
-    }
-
-    /// Generate an equality constraint and add it to the manager
-    /// Returns a SymBool representing the constraint
-    pub fn eq_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Eq, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Generate a not-equal constraint
-    pub fn ne_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Ne, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Generate a less-than constraint
-    pub fn lt_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Lt, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Generate a less-than-or-equal constraint
-    pub fn le_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Le, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Generate a greater-than constraint
-    pub fn gt_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Gt, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Generate a greater-than-or-equal constraint
-    pub fn ge_constraint(&self, other: &Self) -> SymExpr {
-        SymExpr::binary_op(BinOp::Ge, self.expr.clone(), other.expr.clone())
-    }
-
-    /// Add an equality constraint to the manager
-    pub fn assert_eq(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.eq_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-
-    /// Add a not-equal constraint to the manager
-    pub fn assert_ne(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.ne_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-
-    /// Add a less-than constraint to the manager
-    pub fn assert_lt(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.lt_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-
-    /// Add a less-than-or-equal constraint to the manager
-    pub fn assert_le(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.le_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-
-    /// Add a greater-than constraint to the manager
-    pub fn assert_gt(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.gt_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-
-    /// Add a greater-than-or-equal constraint to the manager
-    pub fn assert_ge(&self, other: &Self) -> crate::SymExResult<()> {
-        let constraint = self.ge_constraint(other);
-        let mut mgr = self.manager.lock().unwrap();
-        mgr.add_constraint(constraint)
-    }
-}
-
-// Implement Debug trait for SymU64
-impl fmt::Debug for SymU64 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SymU64")
-            .field("variable_name", &self.variable_name)
-            .field("expr", &self.expr)
-            .field("concrete_value", &self.concrete_value)
-            .finish()
-    }
-}
-
-// Implement Add trait for SymU64
-impl Add for SymU64 {
-    type Output = SymU64;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Add, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_add(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Add trait for &SymU64
-impl Add for &SymU64 {
-    type Output = SymU64;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Add, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_add(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Sub trait for SymU64
-impl Sub for SymU64 {
-    type Output = SymU64;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Sub, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_sub(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Sub trait for &SymU64
-impl Sub for &SymU64 {
-    type Output = SymU64;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Sub, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_sub(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Mul trait for SymU64
-impl Mul for SymU64 {
-    type Output = SymU64;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Mul, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_mul(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Mul trait for &SymU64
-impl Mul for &SymU64 {
-    type Output = SymU64;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Mul, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a.wrapping_mul(b)),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Div trait for SymU64
-impl Div for SymU64 {
-    type Output = SymU64;
-
-    fn div(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Div, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b != 0 => Some(a / b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Div trait for &SymU64
-impl Div for &SymU64 {
-    type Output = SymU64;
-
-    fn div(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Div, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b != 0 => Some(a / b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Rem trait for SymU64
-impl Rem for SymU64 {
-    type Output = SymU64;
-
-    fn rem(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Mod, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b != 0 => Some(a % b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Rem trait for &SymU64
-impl Rem for &SymU64 {
-    type Output = SymU64;
-
-    fn rem(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Mod, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b != 0 => Some(a % b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement PartialEq trait for SymU64
-impl PartialEq for SymU64 {
-    fn eq(&self, other: &Self) -> bool {
-        // If we have concrete values for both, use them
-        if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-            return a == b;
-        }
-
-        // If we're in symbolic mode, this creates a branch point
-        if is_symbolic_mode() {
-            // Check if we have a predetermined branch decision
-            if let Some(decision) = get_next_branch_decision() {
-                // Add the appropriate constraint to the manager
-                let constraint = if decision {
-                    self.eq_constraint(other)
-                } else {
-                    self.ne_constraint(other)
-                };
-
-                // Add constraint and check satisfiability immediately
-                let mut mgr = self.manager.lock().unwrap();
-                let _ = mgr.add_constraint(constraint);
-
-                // OPTIMIZATION: Early unsatisfiability detection
-                // Check if the path is still satisfiable after adding this constraint
-                if let Ok(is_sat) = mgr.is_satisfiable() {
-                    if !is_sat {
-                        // Path became unsatisfiable - mark it
-                        drop(mgr); // Release lock before calling mark function
-                        mark_path_unsatisfiable();
-                    }
-                }
-
-                return decision;
-            }
-
-            // No predetermined decision - this is the first time we're seeing this branch
-            // We'll return the concrete result if available, or false as default
-            // The explore function will re-execute with both true and false
-            if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-                return a == b;
-            }
-
-            // For purely symbolic values, we need to make a choice
-            // Return false by default (explore will try both)
-            false
-        } else {
-            // Not in symbolic mode - just do structural equality
-            self.expr == other.expr
-        }
-    }
-}
-
-// Implement Eq trait for SymU64
-impl Eq for SymU64 {}
-
-// Implement PartialOrd trait for SymU64
-impl PartialOrd for SymU64 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Delegate to Ord implementation for consistency
-        Some(self.cmp(other))
-    }
-}
-
-// Implement Ord trait for SymU64
-impl Ord for SymU64 {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // If we have concrete values, use them
-        if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-            return a.cmp(&b);
-        }
-
-        // If we're in symbolic mode, comparisons create branch points
-        if is_symbolic_mode() {
-            // For Ord, we need to return an Ordering, but we can't easily fork on 3 outcomes
-            // So we'll use the concrete values if available, or use a deterministic ordering
-            // The user should use explicit comparisons (>, <, ==) for branching
-            if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-                a.cmp(&b)
-            } else {
-                // Deterministic ordering based on variable names
-                self.variable_name.cmp(&other.variable_name)
-            }
-        } else {
-            // Not in symbolic mode
-            match (self.concrete_value, other.concrete_value) {
-                (Some(a), Some(b)) => a.cmp(&b),
-                _ => self.variable_name.cmp(&other.variable_name),
-            }
-        }
-    }
-}
-
-// Implement BitAnd trait for SymU64
-impl BitAnd for SymU64 {
-    type Output = SymU64;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitAnd, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a & b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement BitAnd trait for &SymU64
-impl BitAnd for &SymU64 {
-    type Output = SymU64;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitAnd, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a & b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement BitOr trait for SymU64
-impl BitOr for SymU64 {
-    type Output = SymU64;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitOr, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a | b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement BitOr trait for &SymU64
-impl BitOr for &SymU64 {
-    type Output = SymU64;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitOr, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a | b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement BitXor trait for SymU64
-impl BitXor for SymU64 {
-    type Output = SymU64;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitXor, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a ^ b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement BitXor trait for &SymU64
-impl BitXor for &SymU64 {
-    type Output = SymU64;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::BitXor, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) => Some(a ^ b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Shl trait for SymU64
-impl Shl<SymU64> for SymU64 {
-    type Output = SymU64;
-
-    fn shl(self, rhs: SymU64) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Shl, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b < 64 => Some(a << b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Shl trait for &SymU64
-impl Shl<&SymU64> for &SymU64 {
-    type Output = SymU64;
-
-    fn shl(self, rhs: &SymU64) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Shl, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b < 64 => Some(a << b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement Shr trait for SymU64
-impl Shr<SymU64> for SymU64 {
-    type Output = SymU64;
-
-    fn shr(self, rhs: SymU64) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Shr, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b < 64 => Some(a >> b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: self.manager,
-        }
-    }
-}
-
-// Implement Shr trait for &SymU64
-impl Shr<&SymU64> for &SymU64 {
-    type Output = SymU64;
-
-    fn shr(self, rhs: &SymU64) -> Self::Output {
-        let expr = SymExpr::binary_op(BinOp::Shr, self.expr.clone(), rhs.expr.clone());
-        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
-            (Some(a), Some(b)) if b < 64 => Some(a >> b),
-            _ => None,
-        };
-
-        SymU64 {
-            variable_name: {
-                let mgr = self.manager.lock().unwrap();
-                mgr.fresh_variable("u64")
-            },
-            expr,
-            concrete_value,
-            manager: Arc::clone(&self.manager),
-        }
-    }
-}
-
-// Implement From<u64> for SymU64
-// Uses the global thread-local manager
-impl From<u64> for SymU64 {
-    fn from(value: u64) -> Self {
-        // Use the global thread-local manager
-        let manager = crate::get_global_manager().expect("Failed to get global manager");
-        SymU64::from_concrete(value, manager)
-    }
-}
-
-// Implement TryFrom<SymU64> for u64
-impl TryFrom<SymU64> for u64 {
-    type Error = &'static str;
-
-    fn try_from(value: SymU64) -> Result<Self, Self::Error> {
-        value.concrete_value.ok_or("No concrete value available")
-    }
-}
-
-// Implement TryFrom<&SymU64> for u64
-impl TryFrom<&SymU64> for u64 {
-    type Error = &'static str;
-
-    fn try_from(value: &SymU64) -> Result<Self, Self::Error> {
-        value.concrete_value.ok_or("No concrete value available")
-    }
-}
-
-pub struct SymI32 {
-    // Will contain symbolic variable identifier and manager reference
-}
+// Generate SymU64 using the macro
+crate::define_sym_int!(SymU64, u64, U64, "u64", 64, false, get_u64);
 
 /// Symbolic boolean type
 ///
@@ -1010,6 +198,34 @@ impl SymBool {
             variable_name: name,
             expr,
             concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Create a new symbolic bool with an initial concrete value
+    ///
+    /// This is useful for concolic execution where you want to track a value
+    /// symbolically but also maintain a concrete value for fast path checking.
+    pub fn with_value(value: bool, manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mut mgr = manager.lock().unwrap();
+            let type_info = TypeInfo {
+                type_name: "bool".to_string(),
+                bit_width: None,
+                is_signed: false,
+                creation_site: None,
+            };
+            let name = mgr.fresh_variable("bool");
+            let _ = mgr.register_variable(name.clone(), type_info);
+            name
+        };
+
+        let expr = SymExpr::Variable(variable_name.clone());
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: Some(value),
             manager,
         }
     }
@@ -1489,6 +705,18 @@ impl TryFrom<&SymBool> for bool {
 
 // Additional symbolic types will be added in later tasks
 
+// Generate SymU32 using the macro
+crate::define_sym_int!(SymU32, u32, U32, "u32", 32, false, get_u32);
+
+// Generate SymI32 using the macro
+crate::define_sym_int!(SymI32, i32, I32, "i32", 32, true, get_i32);
+
+// Generate SymI64 using the macro
+crate::define_sym_int!(SymI64, i64, I64, "i64", 64, true, get_i64);
+
+// Generate SymU8 using the macro
+crate::define_sym_int!(SymU8, u8, U8, "u8", 8, false, get_u8);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1507,7 +735,7 @@ mod tests {
         let sym = SymU64::new(Arc::clone(&manager));
 
         assert!(sym.variable_name().starts_with("u64_"));
-        assert!(sym.concrete_value().is_none());
+        assert_eq!(sym.concrete_value(), Some(0));
     }
 
     #[test]
@@ -1585,17 +813,17 @@ mod tests {
         let a = SymU64::new(Arc::clone(&manager));
         let b = SymU64::new(Arc::clone(&manager));
 
-        // Operations on purely symbolic values should create expressions
+        // Operations on symbolic values should create expressions with concrete values
         let sum = &a + &b;
-        assert!(sum.concrete_value().is_none());
+        assert_eq!(sum.concrete_value(), Some(0)); // 0 + 0 = 0
         assert!(matches!(sum.expr(), SymExpr::BinaryOp(BinOp::Add, _, _)));
 
         let diff = &a - &b;
-        assert!(diff.concrete_value().is_none());
+        assert_eq!(diff.concrete_value(), Some(0)); // 0 - 0 = 0
         assert!(matches!(diff.expr(), SymExpr::BinaryOp(BinOp::Sub, _, _)));
 
         let prod = &a * &b;
-        assert!(prod.concrete_value().is_none());
+        assert_eq!(prod.concrete_value(), Some(0)); // 0 * 0 = 0
         assert!(matches!(prod.expr(), SymExpr::BinaryOp(BinOp::Mul, _, _)));
     }
 
@@ -1727,7 +955,7 @@ mod tests {
 
         let sym = SymU64::new_global();
         assert!(sym.variable_name().starts_with("u64_"));
-        assert!(sym.concrete_value().is_none());
+        assert_eq!(sym.concrete_value(), Some(0));
     }
 
     #[test]
@@ -1994,23 +1222,23 @@ mod tests {
         let a = SymU64::new(Arc::clone(&manager));
         let b = SymU64::new(Arc::clone(&manager));
 
-        // Operations on purely symbolic values should create expressions
+        // Operations on symbolic values should create expressions with concrete values
         let and_result = &a & &b;
-        assert!(and_result.concrete_value().is_none());
+        assert_eq!(and_result.concrete_value(), Some(0)); // 0 & 0 = 0
         assert!(matches!(
             and_result.expr(),
             SymExpr::BinaryOp(BinOp::BitAnd, _, _)
         ));
 
         let or_result = &a | &b;
-        assert!(or_result.concrete_value().is_none());
+        assert_eq!(or_result.concrete_value(), Some(0)); // 0 | 0 = 0
         assert!(matches!(
             or_result.expr(),
             SymExpr::BinaryOp(BinOp::BitOr, _, _)
         ));
 
         let xor_result = &a ^ &b;
-        assert!(xor_result.concrete_value().is_none());
+        assert_eq!(xor_result.concrete_value(), Some(0)); // 0 ^ 0 = 0
         assert!(matches!(
             xor_result.expr(),
             SymExpr::BinaryOp(BinOp::BitXor, _, _)
@@ -2023,16 +1251,16 @@ mod tests {
         let a = SymU64::new(Arc::clone(&manager));
         let b = SymU64::new(Arc::clone(&manager));
 
-        // Shift operations on purely symbolic values should create expressions
+        // Shift operations on symbolic values should create expressions with concrete values
         let shl_result = &a << &b;
-        assert!(shl_result.concrete_value().is_none());
+        assert_eq!(shl_result.concrete_value(), Some(0)); // 0 << 0 = 0
         assert!(matches!(
             shl_result.expr(),
             SymExpr::BinaryOp(BinOp::Shl, _, _)
         ));
 
         let shr_result = &a >> &b;
-        assert!(shr_result.concrete_value().is_none());
+        assert_eq!(shr_result.concrete_value(), Some(0)); // 0 >> 0 = 0
         assert!(matches!(
             shr_result.expr(),
             SymExpr::BinaryOp(BinOp::Shr, _, _)
@@ -2060,8 +1288,9 @@ mod tests {
         let manager = create_test_manager();
         let sym = SymU64::new(Arc::clone(&manager));
 
+        // new() now initializes concrete_value to Some(0)
         let result: Result<u64, _> = sym.try_into();
-        assert!(result.is_err());
+        assert_eq!(result, Ok(0));
     }
 
     #[test]

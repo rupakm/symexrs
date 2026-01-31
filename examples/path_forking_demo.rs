@@ -13,10 +13,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Example 1: Simple if-else branch");
     let result = explore_default(|manager| {
         let x = SymU64::new(Arc::clone(manager));
+        let y = SymU64::new(Arc::clone(manager));
         let zero = SymU64::from_concrete(0, Arc::clone(manager));
-
+        println!("Executing");
         if x == zero {
             println!("  Branch: x == 0");
+            if x == y {
+                println!("    Branch: x == y");
+            } else if y == zero {
+                println!("    Branch: x!=y, y == 0 (impossible)");
+            } else {
+                println!("  Branch: x!=y, y != 0");
+            }
         } else {
             println!("  Branch: x != 0");
         }

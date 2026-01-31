@@ -63,6 +63,7 @@ pub enum ConstValue {
     F64(f64),
     Bool(bool),
     U8(u8),
+    U32(u32),
     I32(i32),
     F32(f32),
 }
@@ -94,6 +95,10 @@ impl Hash for ConstValue {
             }
             ConstValue::I32(v) => {
                 5u8.hash(state);
+                v.hash(state);
+            }
+            ConstValue::U32(v) => {
+                7u8.hash(state);
                 v.hash(state);
             }
             ConstValue::F32(v) => {
@@ -174,6 +179,7 @@ impl fmt::Display for ConstValue {
             ConstValue::F64(val) => write!(f, "{val}"),
             ConstValue::Bool(val) => write!(f, "{val}"),
             ConstValue::U8(val) => write!(f, "{val}"),
+            ConstValue::U32(val) => write!(f, "{val}"),
             ConstValue::I32(val) => write!(f, "{val}"),
             ConstValue::F32(val) => write!(f, "{val}"),
         }
@@ -637,6 +643,7 @@ impl ConstValue {
             ConstValue::F64(_) => "f64",
             ConstValue::Bool(_) => "bool",
             ConstValue::U8(_) => "u8",
+            ConstValue::U32(_) => "u32",
             ConstValue::I32(_) => "i32",
             ConstValue::F32(_) => "f32",
         }
@@ -651,7 +658,11 @@ impl ConstValue {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_)
+            ConstValue::U64(_)
+                | ConstValue::I64(_)
+                | ConstValue::U8(_)
+                | ConstValue::U32(_)
+                | ConstValue::I32(_)
         )
     }
 
@@ -680,6 +691,7 @@ impl ConstValue {
             }
             ConstValue::Bool(val) => val.to_string(),
             ConstValue::U8(val) => val.to_string(),
+            ConstValue::U32(val) => val.to_string(),
             ConstValue::I32(val) => val.to_string(),
             ConstValue::F32(val) => {
                 if val.is_nan() {
@@ -700,9 +712,11 @@ impl ConstValue {
     /// Get the SMT-LIB sort (type) for this constant value
     pub fn smt_sort(&self) -> &'static str {
         match self {
-            ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_) => {
-                "Int"
-            }
+            ConstValue::U64(_)
+            | ConstValue::I64(_)
+            | ConstValue::U8(_)
+            | ConstValue::U32(_)
+            | ConstValue::I32(_) => "Int",
             ConstValue::F64(_) => "(_ FloatingPoint 11 53)",
             ConstValue::F32(_) => "(_ FloatingPoint 8 24)",
             ConstValue::Bool(_) => "Bool",

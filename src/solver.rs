@@ -50,6 +50,7 @@ impl Model {
             Some(ConstValue::I32(val)) => Some(*val as i64),
             Some(ConstValue::U64(val)) => Some(*val as i64),
             Some(ConstValue::U8(val)) => Some(*val as i64),
+            Some(ConstValue::U32(val)) => Some(*val as i64),
             _ => None,
         }
     }
@@ -68,7 +69,56 @@ impl Model {
             Some(ConstValue::U64(val)) => Some(*val),
             Some(ConstValue::I64(val)) => Some(*val as u64),
             Some(ConstValue::U8(val)) => Some(*val as u64),
+            Some(ConstValue::U32(val)) => Some(*val as u64),
             Some(ConstValue::I32(val)) => Some(*val as u64),
+            _ => None,
+        }
+    }
+
+    /// Get the u32 value assigned to a variable (for concolic execution)
+    pub fn get_u32(&self, var_name: &str) -> Option<u32> {
+        match self.assignments.get(var_name) {
+            Some(ConstValue::U32(val)) => Some(*val),
+            Some(ConstValue::U64(val)) => Some(*val as u32),
+            Some(ConstValue::I64(val)) => Some(*val as u32),
+            Some(ConstValue::U8(val)) => Some(*val as u32),
+            Some(ConstValue::I32(val)) => Some(*val as u32),
+            _ => None,
+        }
+    }
+
+    /// Get the i32 value assigned to a variable (for concolic execution)
+    pub fn get_i32(&self, var_name: &str) -> Option<i32> {
+        match self.assignments.get(var_name) {
+            Some(ConstValue::I32(val)) => Some(*val),
+            Some(ConstValue::I64(val)) => Some(*val as i32),
+            Some(ConstValue::U64(val)) => Some(*val as i32),
+            Some(ConstValue::U8(val)) => Some(*val as i32),
+            Some(ConstValue::U32(val)) => Some(*val as i32),
+            _ => None,
+        }
+    }
+
+    /// Get the i64 value assigned to a variable (for concolic execution)
+    pub fn get_i64(&self, var_name: &str) -> Option<i64> {
+        match self.assignments.get(var_name) {
+            Some(ConstValue::I64(val)) => Some(*val),
+            Some(ConstValue::I32(val)) => Some(*val as i64),
+            Some(ConstValue::U64(val)) => Some(*val as i64),
+            Some(ConstValue::U8(val)) => Some(*val as i64),
+            Some(ConstValue::U32(val)) => Some(*val as i64),
+            _ => None,
+        }
+    }
+
+    /// Get the u8 value assigned to a variable (for concolic execution)
+    pub fn get_u8(&self, var_name: &str) -> Option<u8> {
+        match self.assignments.get(var_name) {
+            Some(ConstValue::U8(val)) => Some(*val),
+            Some(ConstValue::U64(val)) => Some(*val as u8),
+            Some(ConstValue::I64(val)) => Some(*val as u8),
+            Some(ConstValue::U32(val)) => Some(*val as u8),
+            Some(ConstValue::I32(val)) => Some(*val as u8),
             _ => None,
         }
     }
@@ -441,6 +491,7 @@ impl Z3Solver {
                         }
                         Ok(Int::from_u64(&self.context, *n))
                     }
+                    ConstValue::U32(n) => Ok(Int::from_u64(&self.context, *n as u64)),
                     ConstValue::U8(n) => Ok(Int::from_u64(&self.context, *n as u64)),
                     ConstValue::F64(f) => {
                         if f.is_nan() {

@@ -8,6 +8,7 @@ pub mod error;
 pub mod expressions;
 pub mod manager;
 pub mod solver;
+pub mod sym_int_macro;
 pub mod symbolic_types;
 
 #[cfg(test)]
@@ -16,12 +17,16 @@ mod test_deps;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
+// Custom panic payload for unsatisfiable path detection
+#[derive(Debug)]
+pub(crate) struct UnsatPanic;
+
 // Re-export commonly used types for convenience
 pub use error::{SymExError, SymExResult};
 pub use expressions::{BinOp, ConstValue, SymExpr, UnOp};
 pub use manager::{ExecutionState, SymExManager, TypeInfo};
 pub use solver::{Model, SatResult, SmtSolver, Z3Solver};
-pub use symbolic_types::{SymBool, SymU64};
+pub use symbolic_types::{SymBool, SymI32, SymI64, SymU8, SymU32, SymU64};
 
 /// Version information
 pub const VERSION: &str = "0.1.0";
@@ -224,8 +229,8 @@ where
     F: Fn(&Arc<Mutex<SymExManager>>) -> SymExResult<()>,
 {
     use crate::symbolic_types::{
-        disable_symbolic_mode, enable_symbolic_mode, new_branch_encountered,
-        path_became_unsatisfiable, reset_branch_tracking, set_branch_decisions,
+        disable_symbolic_mode, enable_symbolic_mode, new_branch_encountered, reset_branch_tracking,
+        set_branch_decisions,
     };
 
     // Enable symbolic mode
@@ -266,32 +271,44 @@ where
         // Set the branch decisions for this path
         set_branch_decisions(branch_decisions.clone());
 
-        // Execute the user's function
-        let execution_result = f(&manager_arc);
+        // Execute the user's function with panic catching for early UNSAT detection
+        let execution_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&manager_arc)));
 
-        // OPTIMIZATION: Check if path became unsatisfiable during execution
-        if path_became_unsatisfiable() {
-            // Path was detected as unsatisfiable early - count it and skip
-            total_paths_explored += 1;
-            unsatisfiable_paths += 1;
-            _early_terminations += 1;
+        // Handle the execution result
+        match execution_result {
+            Ok(Ok(())) => {
+                // Function executed successfully - continue to check satisfiability
+            }
+            Ok(Err(_)) => {
+                // User function returned an error - skip this path
+                continue;
+            }
+            Err(panic_payload) => {
+                // A panic occurred - check if it's our UnsatPanic
+                if panic_payload.downcast_ref::<UnsatPanic>().is_some() {
+                    // This is an early UNSAT detection - count it and skip
+                    total_paths_explored += 1;
+                    unsatisfiable_paths += 1;
+                    _early_terminations += 1;
 
-            // Still collect statistics for reporting
-            let (variable_count, constraint_count) = {
-                let mgr = manager_arc.lock().unwrap();
-                let stats = mgr.get_stats();
-                (stats.variable_count, stats.constraint_count)
-            };
+                    // Collect statistics for reporting
+                    let (variable_count, constraint_count) = {
+                        let mgr = manager_arc.lock().unwrap();
+                        let stats = mgr.get_stats();
+                        (stats.variable_count, stats.constraint_count)
+                    };
 
-            max_variable_count = max_variable_count.max(variable_count);
-            max_constraint_count = max_constraint_count.max(constraint_count);
+                    max_variable_count = max_variable_count.max(variable_count);
+                    max_constraint_count = max_constraint_count.max(constraint_count);
 
-            all_paths.push((branch_decisions.clone(), constraint_count, false));
-            continue; // Skip to next path
-        }
-
-        if execution_result.is_err() {
-            continue;
+                    all_paths.push((branch_decisions.clone(), constraint_count, false));
+                    continue; // Skip to next path
+                } else {
+                    // This is a real panic from user code - propagate it
+                    std::panic::resume_unwind(panic_payload);
+                }
+            }
         }
 
         // Check if we encountered a new branch
