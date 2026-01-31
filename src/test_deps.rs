@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod dependency_tests {
-    use quickcheck::{quickcheck, TestResult};
+    use quickcheck::{TestResult, quickcheck};
     use quickcheck_macros::quickcheck as qc;
     use z3::{Context, Solver, ast::Int};
 
@@ -11,17 +11,17 @@ mod dependency_tests {
         let cfg = z3::Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
-        
+
         // Create a simple constraint: x > 0
         let x = Int::new_const(&ctx, "x");
         let zero = Int::from_i64(&ctx, 0);
         let constraint = x.gt(&zero);
-        
+
         solver.assert(&constraint);
-        
+
         // Should be satisfiable
         assert_eq!(solver.check(), z3::SatResult::Sat);
-        
+
         // Get a model and verify it satisfies the constraint
         if let Some(model) = solver.get_model() {
             if let Some(x_val) = model.eval(&x, true) {
@@ -37,16 +37,16 @@ mod dependency_tests {
         let cfg = z3::Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
-        
+
         // Create contradictory constraints: x > 0 AND x < 0
         let x = Int::new_const(&ctx, "x");
         let zero = Int::from_i64(&ctx, 0);
         let constraint1 = x.gt(&zero);
         let constraint2 = x.lt(&zero);
-        
+
         solver.assert(&constraint1);
         solver.assert(&constraint2);
-        
+
         // Should be unsatisfiable
         assert_eq!(solver.check(), z3::SatResult::Unsat);
     }

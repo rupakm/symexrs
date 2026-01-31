@@ -1,5 +1,5 @@
 //! Error types and result handling for symbolic execution
-//! 
+//!
 //! This module defines comprehensive error types for all layers of the
 //! symbolic execution system and provides convenient result type aliases.
 
@@ -57,24 +57,24 @@ impl fmt::Display for SymExError {
         match self {
             // Symbolic Type Errors
             SymExError::InvalidOperation(msg) => {
-                write!(f, "Invalid operation: {}", msg)
+                write!(f, "Invalid operation: {msg}")
             }
             SymExError::TypeMismatch { expected, found } => {
-                write!(f, "Type mismatch: expected {}, found {}", expected, found)
+                write!(f, "Type mismatch: expected {expected}, found {found}")
             }
             SymExError::OverflowError(msg) => {
-                write!(f, "Arithmetic overflow: {}", msg)
+                write!(f, "Arithmetic overflow: {msg}")
             }
 
             // Expression Errors
             SymExError::MalformedExpression(msg) => {
-                write!(f, "Malformed expression: {}", msg)
+                write!(f, "Malformed expression: {msg}")
             }
             SymExError::UnboundVariable(var) => {
-                write!(f, "Unbound variable: {}", var)
+                write!(f, "Unbound variable: {var}")
             }
             SymExError::CircularReference(msg) => {
-                write!(f, "Circular reference: {}", msg)
+                write!(f, "Circular reference: {msg}")
             }
 
             // SMT Solver Errors
@@ -82,32 +82,32 @@ impl fmt::Display for SymExError {
                 write!(f, "SMT solver timeout")
             }
             SymExError::SolverError(msg) => {
-                write!(f, "SMT solver error: {}", msg)
+                write!(f, "SMT solver error: {msg}")
             }
             SymExError::ModelExtractionError(msg) => {
-                write!(f, "Model extraction error: {}", msg)
+                write!(f, "Model extraction error: {msg}")
             }
 
             // Manager Errors
             SymExError::StateCorruption(msg) => {
-                write!(f, "State corruption: {}", msg)
+                write!(f, "State corruption: {msg}")
             }
             SymExError::StackUnderflow => {
                 write!(f, "Backtracking stack underflow")
             }
             SymExError::ResourceExhaustion(msg) => {
-                write!(f, "Resource exhaustion: {}", msg)
+                write!(f, "Resource exhaustion: {msg}")
             }
             SymExError::DuplicateVariable(var) => {
-                write!(f, "Duplicate variable: {}", var)
+                write!(f, "Duplicate variable: {var}")
             }
 
             // General Errors
             SymExError::Generic(msg) => {
-                write!(f, "Error: {}", msg)
+                write!(f, "Error: {msg}")
             }
             SymExError::IoError(msg) => {
-                write!(f, "I/O error: {}", msg)
+                write!(f, "I/O error: {msg}")
             }
         }
     }

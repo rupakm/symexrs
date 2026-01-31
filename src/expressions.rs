@@ -1,12 +1,12 @@
 //! Symbolic expression representation and manipulation
-//! 
+//!
 //! This module defines the abstract syntax tree for symbolic expressions
 //! and provides operations for building, simplifying, and serializing
 //! symbolic expressions to SMT-LIB format.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Abstract syntax tree representation of symbolic expressions
@@ -28,18 +28,31 @@ pub enum SymExpr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     // Arithmetic operations
-    Add, Sub, Mul, Div, Mod,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
     // Bitwise operations
-    BitAnd, BitOr, BitXor, Shl, Shr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     // Comparison operations
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 /// Unary operations supported in symbolic expressions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
-    Neg,    // Arithmetic negation
-    Not,    // Bitwise/logical NOT
+    Neg, // Arithmetic negation
+    Not, // Bitwise/logical NOT
 }
 
 /// Constant values that can appear in symbolic expressions
@@ -94,16 +107,16 @@ impl Hash for ConstValue {
 impl fmt::Display for SymExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SymExpr::Variable(name) => write!(f, "{}", name),
-            SymExpr::Constant(val) => write!(f, "{}", val),
+            SymExpr::Variable(name) => write!(f, "{name}"),
+            SymExpr::Constant(val) => write!(f, "{val}"),
             SymExpr::BinaryOp(op, left, right) => {
-                write!(f, "({} {} {})", left, op, right)
+                write!(f, "({left} {op} {right})")
             }
             SymExpr::UnaryOp(op, expr) => {
-                write!(f, "({} {})", op, expr)
+                write!(f, "({op} {expr})")
             }
             SymExpr::Conditional(cond, then_expr, else_expr) => {
-                write!(f, "(if {} then {} else {})", cond, then_expr, else_expr)
+                write!(f, "(if {cond} then {then_expr} else {else_expr})")
             }
         }
     }
@@ -129,7 +142,7 @@ impl fmt::Display for BinOp {
             BinOp::Gt => ">",
             BinOp::Ge => ">=",
         };
-        write!(f, "{}", op_str)
+        write!(f, "{op_str}")
     }
 }
 
@@ -139,7 +152,7 @@ impl fmt::Display for UnOp {
             UnOp::Neg => "-",
             UnOp::Not => "!",
         };
-        write!(f, "{}", op_str)
+        write!(f, "{op_str}")
     }
 }
 
@@ -156,13 +169,13 @@ impl UnOp {
 impl fmt::Display for ConstValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConstValue::U64(val) => write!(f, "{}", val),
-            ConstValue::I64(val) => write!(f, "{}", val),
-            ConstValue::F64(val) => write!(f, "{}", val),
-            ConstValue::Bool(val) => write!(f, "{}", val),
-            ConstValue::U8(val) => write!(f, "{}", val),
-            ConstValue::I32(val) => write!(f, "{}", val),
-            ConstValue::F32(val) => write!(f, "{}", val),
+            ConstValue::U64(val) => write!(f, "{val}"),
+            ConstValue::I64(val) => write!(f, "{val}"),
+            ConstValue::F64(val) => write!(f, "{val}"),
+            ConstValue::Bool(val) => write!(f, "{val}"),
+            ConstValue::U8(val) => write!(f, "{val}"),
+            ConstValue::I32(val) => write!(f, "{val}"),
+            ConstValue::F32(val) => write!(f, "{val}"),
         }
     }
 }
@@ -278,13 +291,23 @@ impl SymExpr {
             SymExpr::Variable(name) => name.clone(),
             SymExpr::Constant(value) => value.to_smt_lib(),
             SymExpr::BinaryOp(op, left, right) => {
-                format!("({} {} {})", op.to_smt_lib(), left.to_smt_lib(), right.to_smt_lib())
+                format!(
+                    "({} {} {})",
+                    op.to_smt_lib(),
+                    left.to_smt_lib(),
+                    right.to_smt_lib()
+                )
             }
             SymExpr::UnaryOp(op, expr) => {
                 format!("({} {})", op.to_smt_lib(), expr.to_smt_lib())
             }
             SymExpr::Conditional(cond, then_expr, else_expr) => {
-                format!("(ite {} {} {})", cond.to_smt_lib(), then_expr.to_smt_lib(), else_expr.to_smt_lib())
+                format!(
+                    "(ite {} {} {})",
+                    cond.to_smt_lib(),
+                    then_expr.to_smt_lib(),
+                    else_expr.to_smt_lib()
+                )
             }
         }
     }
@@ -293,35 +316,35 @@ impl SymExpr {
     pub fn get_smt_declarations(&self) -> Vec<String> {
         let variables = self.get_variables();
         let mut declarations = Vec::new();
-        
+
         for var in variables {
             // For now, assume all variables are integers (this can be enhanced later)
-            declarations.push(format!("(declare-fun {} () Int)", var));
+            declarations.push(format!("(declare-fun {var} () Int)"));
         }
-        
+
         declarations
     }
 
     /// Generate a complete SMT-LIB script for this expression
     pub fn to_smt_script(&self) -> String {
         let mut script = String::new();
-        
+
         // Add logic declaration
         script.push_str("(set-logic QF_LIA)\n");
-        
+
         // Add variable declarations
         for decl in self.get_smt_declarations() {
             script.push_str(&decl);
             script.push('\n');
         }
-        
+
         // Add the assertion
         script.push_str(&format!("(assert {})\n", self.to_smt_lib()));
-        
+
         // Add check-sat and get-model commands
         script.push_str("(check-sat)\n");
         script.push_str("(get-model)\n");
-        
+
         script
     }
 
@@ -329,20 +352,18 @@ impl SymExpr {
     pub fn simplify(&self) -> SymExpr {
         match self {
             SymExpr::Variable(_) | SymExpr::Constant(_) => self.clone(),
-            
+
             SymExpr::UnaryOp(op, expr) => {
                 let simplified_expr = expr.simplify();
                 match (&simplified_expr, op) {
                     // Constant folding for unary operations
-                    (SymExpr::Constant(val), UnOp::Neg) => {
-                        match val {
-                            ConstValue::I64(n) => SymExpr::constant(ConstValue::I64(-n)),
-                            ConstValue::I32(n) => SymExpr::constant(ConstValue::I32(-n)),
-                            ConstValue::F64(n) => SymExpr::constant(ConstValue::F64(-n)),
-                            ConstValue::F32(n) => SymExpr::constant(ConstValue::F32(-n)),
-                            _ => SymExpr::unary_op(*op, simplified_expr),
-                        }
-                    }
+                    (SymExpr::Constant(val), UnOp::Neg) => match val {
+                        ConstValue::I64(n) => SymExpr::constant(ConstValue::I64(-n)),
+                        ConstValue::I32(n) => SymExpr::constant(ConstValue::I32(-n)),
+                        ConstValue::F64(n) => SymExpr::constant(ConstValue::F64(-n)),
+                        ConstValue::F32(n) => SymExpr::constant(ConstValue::F32(-n)),
+                        _ => SymExpr::unary_op(*op, simplified_expr),
+                    },
                     (SymExpr::Constant(ConstValue::Bool(b)), UnOp::Not) => {
                         SymExpr::constant(ConstValue::Bool(!b))
                     }
@@ -352,52 +373,60 @@ impl SymExpr {
                     _ => SymExpr::unary_op(*op, simplified_expr),
                 }
             }
-            
+
             SymExpr::BinaryOp(op, left, right) => {
                 let simplified_left = left.simplify();
                 let simplified_right = right.simplify();
-                
+
                 match (op, &simplified_left, &simplified_right) {
                     // Constant folding for arithmetic operations
-                    (BinOp::Add, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::I64(a + b))
-                    }
-                    (BinOp::Sub, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::I64(a - b))
-                    }
-                    (BinOp::Mul, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::I64(a * b))
-                    }
-                    (BinOp::Div, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) if *b != 0 => {
-                        SymExpr::constant(ConstValue::I64(a / b))
-                    }
-                    
+                    (
+                        BinOp::Add,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::I64(a + b)),
+                    (
+                        BinOp::Sub,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::I64(a - b)),
+                    (
+                        BinOp::Mul,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::I64(a * b)),
+                    (
+                        BinOp::Div,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) if *b != 0 => SymExpr::constant(ConstValue::I64(a / b)),
+
                     // Algebraic simplifications
                     // x + 0 = x, 0 + x = x
-                    (BinOp::Add, expr, SymExpr::Constant(ConstValue::I64(0))) |
-                    (BinOp::Add, SymExpr::Constant(ConstValue::I64(0)), expr) => expr.clone(),
-                    
+                    (BinOp::Add, expr, SymExpr::Constant(ConstValue::I64(0)))
+                    | (BinOp::Add, SymExpr::Constant(ConstValue::I64(0)), expr) => expr.clone(),
+
                     // x - 0 = x
                     (BinOp::Sub, expr, SymExpr::Constant(ConstValue::I64(0))) => expr.clone(),
-                    
+
                     // x * 0 = 0, 0 * x = 0
-                    (BinOp::Mul, _, SymExpr::Constant(ConstValue::I64(0))) |
-                    (BinOp::Mul, SymExpr::Constant(ConstValue::I64(0)), _) => {
+                    (BinOp::Mul, _, SymExpr::Constant(ConstValue::I64(0)))
+                    | (BinOp::Mul, SymExpr::Constant(ConstValue::I64(0)), _) => {
                         SymExpr::constant(ConstValue::I64(0))
                     }
-                    
+
                     // x * 1 = x, 1 * x = x
-                    (BinOp::Mul, expr, SymExpr::Constant(ConstValue::I64(1))) |
-                    (BinOp::Mul, SymExpr::Constant(ConstValue::I64(1)), expr) => expr.clone(),
-                    
+                    (BinOp::Mul, expr, SymExpr::Constant(ConstValue::I64(1)))
+                    | (BinOp::Mul, SymExpr::Constant(ConstValue::I64(1)), expr) => expr.clone(),
+
                     // x / 1 = x
                     (BinOp::Div, expr, SymExpr::Constant(ConstValue::I64(1))) => expr.clone(),
-                    
+
                     // x - x = 0
                     (BinOp::Sub, left_expr, right_expr) if left_expr == right_expr => {
                         SymExpr::constant(ConstValue::I64(0))
                     }
-                    
+
                     // Boolean constant folding
                     (BinOp::Eq, SymExpr::Constant(a), SymExpr::Constant(b)) => {
                         SymExpr::constant(ConstValue::Bool(const_equal_with_nan(a, b)))
@@ -405,52 +434,70 @@ impl SymExpr {
                     (BinOp::Ne, SymExpr::Constant(a), SymExpr::Constant(b)) => {
                         SymExpr::constant(ConstValue::Bool(!const_equal_with_nan(a, b)))
                     }
-                    
+
                     // Comparison constant folding for integers
-                    (BinOp::Lt, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::Bool(a < b))
-                    }
-                    (BinOp::Le, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::Bool(a <= b))
-                    }
-                    (BinOp::Gt, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::Bool(a > b))
-                    }
-                    (BinOp::Ge, SymExpr::Constant(ConstValue::I64(a)), SymExpr::Constant(ConstValue::I64(b))) => {
-                        SymExpr::constant(ConstValue::Bool(a >= b))
-                    }
-                    
+                    (
+                        BinOp::Lt,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a < b)),
+                    (
+                        BinOp::Le,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a <= b)),
+                    (
+                        BinOp::Gt,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a > b)),
+                    (
+                        BinOp::Ge,
+                        SymExpr::Constant(ConstValue::I64(a)),
+                        SymExpr::Constant(ConstValue::I64(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a >= b)),
+
                     // Bitwise operations constant folding
-                    (BinOp::BitAnd, SymExpr::Constant(ConstValue::U64(a)), SymExpr::Constant(ConstValue::U64(b))) => {
-                        SymExpr::constant(ConstValue::U64(a & b))
-                    }
-                    (BinOp::BitOr, SymExpr::Constant(ConstValue::U64(a)), SymExpr::Constant(ConstValue::U64(b))) => {
-                        SymExpr::constant(ConstValue::U64(a | b))
-                    }
-                    (BinOp::BitXor, SymExpr::Constant(ConstValue::U64(a)), SymExpr::Constant(ConstValue::U64(b))) => {
-                        SymExpr::constant(ConstValue::U64(a ^ b))
-                    }
-                    
+                    (
+                        BinOp::BitAnd,
+                        SymExpr::Constant(ConstValue::U64(a)),
+                        SymExpr::Constant(ConstValue::U64(b)),
+                    ) => SymExpr::constant(ConstValue::U64(a & b)),
+                    (
+                        BinOp::BitOr,
+                        SymExpr::Constant(ConstValue::U64(a)),
+                        SymExpr::Constant(ConstValue::U64(b)),
+                    ) => SymExpr::constant(ConstValue::U64(a | b)),
+                    (
+                        BinOp::BitXor,
+                        SymExpr::Constant(ConstValue::U64(a)),
+                        SymExpr::Constant(ConstValue::U64(b)),
+                    ) => SymExpr::constant(ConstValue::U64(a ^ b)),
+
                     // x ^ x = 0 (for bitwise XOR)
                     (BinOp::BitXor, left_expr, right_expr) if left_expr == right_expr => {
                         SymExpr::constant(ConstValue::U64(0))
                     }
-                    
+
                     // x & x = x
-                    (BinOp::BitAnd, left_expr, right_expr) if left_expr == right_expr => left_expr.clone(),
-                    
+                    (BinOp::BitAnd, left_expr, right_expr) if left_expr == right_expr => {
+                        left_expr.clone()
+                    }
+
                     // x | x = x
-                    (BinOp::BitOr, left_expr, right_expr) if left_expr == right_expr => left_expr.clone(),
-                    
+                    (BinOp::BitOr, left_expr, right_expr) if left_expr == right_expr => {
+                        left_expr.clone()
+                    }
+
                     _ => SymExpr::binary_op(*op, simplified_left, simplified_right),
                 }
             }
-            
+
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 let simplified_cond = cond.simplify();
                 let simplified_then = then_expr.simplify();
                 let simplified_else = else_expr.simplify();
-                
+
                 match &simplified_cond {
                     SymExpr::Constant(ConstValue::Bool(true)) => simplified_then,
                     SymExpr::Constant(ConstValue::Bool(false)) => simplified_else,
@@ -499,7 +546,7 @@ impl ExpressionTable {
     pub fn intern(&self, expr: SymExpr) -> SymExpr {
         let hash = expr.canonical_hash();
         let mut table = self.table.lock().unwrap();
-        
+
         if let Some(existing) = table.get(&hash) {
             existing.clone()
         } else {
@@ -602,7 +649,10 @@ impl ConstValue {
 
     /// Check if this is an integer type
     pub fn is_integer(&self) -> bool {
-        matches!(self, ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_))
+        matches!(
+            self,
+            ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_)
+        )
     }
 
     /// Check if this is a floating-point type
@@ -625,7 +675,7 @@ impl ConstValue {
                         "(_ -oo 11 53)".to_string()
                     }
                 } else {
-                    format!("{}", val)
+                    format!("{val}")
                 }
             }
             ConstValue::Bool(val) => val.to_string(),
@@ -641,7 +691,7 @@ impl ConstValue {
                         "(_ -oo 8 24)".to_string()
                     }
                 } else {
-                    format!("{}", val)
+                    format!("{val}")
                 }
             }
         }
@@ -650,7 +700,9 @@ impl ConstValue {
     /// Get the SMT-LIB sort (type) for this constant value
     pub fn smt_sort(&self) -> &'static str {
         match self {
-            ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_) => "Int",
+            ConstValue::U64(_) | ConstValue::I64(_) | ConstValue::U8(_) | ConstValue::I32(_) => {
+                "Int"
+            }
             ConstValue::F64(_) => "(_ FloatingPoint 11 53)",
             ConstValue::F32(_) => "(_ FloatingPoint 8 24)",
             ConstValue::Bool(_) => "Bool",
@@ -661,17 +713,26 @@ impl ConstValue {
 impl BinOp {
     /// Check if this is an arithmetic operation
     pub fn is_arithmetic(&self) -> bool {
-        matches!(self, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod)
+        matches!(
+            self,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        )
     }
 
     /// Check if this is a bitwise operation
     pub fn is_bitwise(&self) -> bool {
-        matches!(self, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr)
+        matches!(
+            self,
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
+        )
     }
 
     /// Check if this is a comparison operation
     pub fn is_comparison(&self) -> bool {
-        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+        matches!(
+            self,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        )
     }
 
     /// Get the precedence level of this operation (higher number = higher precedence)
@@ -689,7 +750,16 @@ impl BinOp {
 
     /// Check if this operation is commutative
     pub fn is_commutative(&self) -> bool {
-        matches!(self, BinOp::Add | BinOp::Mul | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Eq | BinOp::Ne)
+        matches!(
+            self,
+            BinOp::Add
+                | BinOp::Mul
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Eq
+                | BinOp::Ne
+        )
     }
 
     /// Convert this binary operation to SMT-LIB format
@@ -798,6 +868,7 @@ mod tests {
     }
 
     // Helper function to check if a ConstValue contains NaN
+    #[allow(dead_code)]
     fn contains_nan(val: &ConstValue) -> bool {
         match val {
             ConstValue::F64(f) => f.is_nan(),
@@ -809,7 +880,9 @@ mod tests {
     // Helper function to check if expressions are equal, handling NaN properly
     fn expr_equal_with_nan(left: &SymExpr, right: &SymExpr) -> bool {
         match (left, right) {
-            (SymExpr::Constant(c1), SymExpr::Constant(c2)) => crate::expressions::const_equal_with_nan(c1, c2),
+            (SymExpr::Constant(c1), SymExpr::Constant(c2)) => {
+                crate::expressions::const_equal_with_nan(c1, c2)
+            }
             _ => left == right,
         }
     }
@@ -817,17 +890,21 @@ mod tests {
     // **Feature: symbolic-execution-engine, Property 2: Expression construction from operations**
     // **Validates: Requirements 1.2, 2.1**
     #[qc]
-    fn prop_expression_construction_from_operations(op: BinOp, left_val: ConstValue, right_val: ConstValue) -> bool {
+    fn prop_expression_construction_from_operations(
+        op: BinOp,
+        left_val: ConstValue,
+        right_val: ConstValue,
+    ) -> bool {
         let left = SymExpr::constant(left_val.clone());
         let right = SymExpr::constant(right_val.clone());
         let expr = SymExpr::binary_op(op, left.clone(), right.clone());
-        
+
         // Verify the expression structure is correct
         match expr {
             SymExpr::BinaryOp(actual_op, actual_left, actual_right) => {
-                actual_op == op && 
-                expr_equal_with_nan(&*actual_left, &left) && 
-                expr_equal_with_nan(&*actual_right, &right)
+                actual_op == op
+                    && expr_equal_with_nan(&*actual_left, &left)
+                    && expr_equal_with_nan(&*actual_right, &right)
             }
             _ => false,
         }
@@ -837,7 +914,7 @@ mod tests {
     fn prop_unary_expression_construction(op: UnOp, val: ConstValue) -> bool {
         let operand = SymExpr::constant(val.clone());
         let expr = SymExpr::unary_op(op, operand.clone());
-        
+
         // Verify the expression structure is correct
         match expr {
             SymExpr::UnaryOp(actual_op, actual_operand) => {
@@ -850,7 +927,7 @@ mod tests {
     #[qc]
     fn prop_variable_expression_construction(var_name: String) -> bool {
         let expr = SymExpr::variable(var_name.clone());
-        
+
         match expr {
             SymExpr::Variable(actual_name) => actual_name == var_name,
             _ => false,
@@ -860,7 +937,7 @@ mod tests {
     #[qc]
     fn prop_constant_expression_construction(val: ConstValue) -> bool {
         let expr = SymExpr::constant(val.clone());
-        
+
         match expr {
             SymExpr::Constant(actual_val) => const_equal_with_nan(&actual_val, &val),
             _ => false,
@@ -869,20 +946,20 @@ mod tests {
 
     #[qc]
     fn prop_conditional_expression_construction(
-        cond_val: ConstValue, 
-        then_val: ConstValue, 
-        else_val: ConstValue
+        cond_val: ConstValue,
+        then_val: ConstValue,
+        else_val: ConstValue,
     ) -> bool {
         let cond = SymExpr::constant(cond_val.clone());
         let then_expr = SymExpr::constant(then_val.clone());
         let else_expr = SymExpr::constant(else_val.clone());
         let expr = SymExpr::conditional(cond.clone(), then_expr.clone(), else_expr.clone());
-        
+
         match expr {
             SymExpr::Conditional(actual_cond, actual_then, actual_else) => {
-                expr_equal_with_nan(&*actual_cond, &cond) && 
-                expr_equal_with_nan(&*actual_then, &then_expr) && 
-                expr_equal_with_nan(&*actual_else, &else_expr)
+                expr_equal_with_nan(&*actual_cond, &cond)
+                    && expr_equal_with_nan(&*actual_then, &then_expr)
+                    && expr_equal_with_nan(&*actual_else, &else_expr)
             }
             _ => false,
         }
@@ -931,7 +1008,7 @@ mod tests {
         let var = SymExpr::variable("x".to_string());
         let const_expr = SymExpr::constant(ConstValue::U64(42));
         let add_expr = SymExpr::binary_op(BinOp::Add, var, const_expr);
-        
+
         let display_str = format!("{}", add_expr);
         assert!(display_str.contains("x"));
         assert!(display_str.contains("42"));
@@ -943,11 +1020,11 @@ mod tests {
         assert!(ConstValue::U64(42).is_numeric());
         assert!(ConstValue::U64(42).is_integer());
         assert!(!ConstValue::U64(42).is_float());
-        
+
         assert!(ConstValue::F64(3.14).is_numeric());
         assert!(!ConstValue::F64(3.14).is_integer());
         assert!(ConstValue::F64(3.14).is_float());
-        
+
         assert!(!ConstValue::Bool(true).is_numeric());
         assert!(!ConstValue::Bool(true).is_integer());
         assert!(!ConstValue::Bool(true).is_float());
@@ -959,12 +1036,12 @@ mod tests {
         assert!(!BinOp::Add.is_bitwise());
         assert!(!BinOp::Add.is_comparison());
         assert!(BinOp::Add.is_commutative());
-        
+
         assert!(!BinOp::BitAnd.is_arithmetic());
         assert!(BinOp::BitAnd.is_bitwise());
         assert!(!BinOp::BitAnd.is_comparison());
         assert!(BinOp::BitAnd.is_commutative());
-        
+
         assert!(!BinOp::Lt.is_arithmetic());
         assert!(!BinOp::Lt.is_bitwise());
         assert!(BinOp::Lt.is_comparison());
@@ -1007,7 +1084,7 @@ mod tests {
         let var1 = SymExpr::variable("x".to_string());
         let var2 = SymExpr::variable("y".to_string());
         let expr = SymExpr::binary_op(BinOp::Add, var1, var2);
-        
+
         let declarations = expr.get_smt_declarations();
         assert_eq!(declarations.len(), 2);
         assert!(declarations.contains(&"(declare-fun x () Int)".to_string()));
@@ -1019,7 +1096,7 @@ mod tests {
         let var = SymExpr::variable("x".to_string());
         let const_expr = SymExpr::constant(ConstValue::I64(0));
         let expr = SymExpr::binary_op(BinOp::Gt, var, const_expr);
-        
+
         let script = expr.to_smt_script();
         assert!(script.contains("(set-logic QF_LIA)"));
         assert!(script.contains("(declare-fun x () Int)"));
@@ -1062,14 +1139,14 @@ mod tests {
         // 1. Serialization doesn't crash
         // 2. The result contains expected structure
         // 3. Variables and constants are preserved in the output
-        
+
         let smt_output = expr.to_smt_lib();
-        
+
         // Basic structural checks
         if smt_output.is_empty() {
             return false;
         }
-        
+
         // Check that variables in the original expression appear in the SMT output
         let original_vars = expr.get_variables();
         for var in &original_vars {
@@ -1077,82 +1154,79 @@ mod tests {
                 return false;
             }
         }
-        
+
         // Check that constants are properly serialized
         match &expr {
             SymExpr::Constant(val) => {
                 let expected = val.to_smt_lib();
                 smt_output == expected
             }
-            SymExpr::Variable(name) => {
-                smt_output == *name
-            }
-            SymExpr::BinaryOp(op, _, _) => {
-                smt_output.contains(op.to_smt_lib())
-            }
-            SymExpr::UnaryOp(op, _) => {
-                smt_output.contains(op.to_smt_lib())
-            }
-            SymExpr::Conditional(_, _, _) => {
-                smt_output.contains("ite")
-            }
+            SymExpr::Variable(name) => smt_output == *name,
+            SymExpr::BinaryOp(op, _, _) => smt_output.contains(op.to_smt_lib()),
+            SymExpr::UnaryOp(op, _) => smt_output.contains(op.to_smt_lib()),
+            SymExpr::Conditional(_, _, _) => smt_output.contains("ite"),
         }
     }
 
     #[qc]
     fn prop_smt_script_completeness(expr: SymExpr) -> bool {
         let script = expr.to_smt_script();
-        
+
         // A complete SMT script should contain all necessary components
-        script.contains("(set-logic") &&
-        script.contains("(check-sat)") &&
-        script.contains("(get-model)") &&
-        script.contains("(assert")
+        script.contains("(set-logic")
+            && script.contains("(check-sat)")
+            && script.contains("(get-model)")
+            && script.contains("(assert")
     }
 
     #[qc]
     fn prop_smt_declarations_completeness(expr: SymExpr) -> bool {
         let variables = expr.get_variables();
         let declarations = expr.get_smt_declarations();
-        
+
         // Every variable should have a declaration
         if variables.len() != declarations.len() {
             return false;
         }
-        
+
         // Each variable should appear in exactly one declaration
         // Use more precise matching to avoid substring issues
         for var in &variables {
             let expected_decl = format!("(declare-fun {} () Int)", var);
-            let matching_decls = declarations.iter()
+            let matching_decls = declarations
+                .iter()
                 .filter(|decl| **decl == expected_decl)
                 .count();
             if matching_decls != 1 {
                 return false;
             }
         }
-        
+
         true
     }
 
     #[qc]
-    fn prop_smt_serialization_preserves_structure(op: BinOp, left_val: ConstValue, right_val: ConstValue) -> bool {
+    fn prop_smt_serialization_preserves_structure(
+        op: BinOp,
+        left_val: ConstValue,
+        right_val: ConstValue,
+    ) -> bool {
         let left = SymExpr::constant(left_val);
         let right = SymExpr::constant(right_val);
         let expr = SymExpr::binary_op(op, left.clone(), right.clone());
-        
+
         let smt_output = expr.to_smt_lib();
-        
+
         // Should be in the form (op left_smt right_smt)
         let expected_op = op.to_smt_lib();
         let left_smt = left.to_smt_lib();
         let right_smt = right.to_smt_lib();
-        
-        smt_output.starts_with('(') &&
-        smt_output.ends_with(')') &&
-        smt_output.contains(expected_op) &&
-        smt_output.contains(&left_smt) &&
-        smt_output.contains(&right_smt)
+
+        smt_output.starts_with('(')
+            && smt_output.ends_with(')')
+            && smt_output.contains(expected_op)
+            && smt_output.contains(&left_smt)
+            && smt_output.contains(&right_smt)
     }
 
     #[test]
@@ -1161,7 +1235,7 @@ mod tests {
         let expr = SymExpr::binary_op(
             BinOp::Add,
             SymExpr::constant(ConstValue::I64(2)),
-            SymExpr::constant(ConstValue::I64(3))
+            SymExpr::constant(ConstValue::I64(3)),
         );
         let simplified = expr.simplify();
         assert_eq!(simplified, SymExpr::constant(ConstValue::I64(5)));
@@ -1170,7 +1244,7 @@ mod tests {
         let expr = SymExpr::binary_op(
             BinOp::Mul,
             SymExpr::variable("x".to_string()),
-            SymExpr::constant(ConstValue::I64(0))
+            SymExpr::constant(ConstValue::I64(0)),
         );
         let simplified = expr.simplify();
         assert_eq!(simplified, SymExpr::constant(ConstValue::I64(0)));
@@ -1180,7 +1254,7 @@ mod tests {
         let expr = SymExpr::binary_op(
             BinOp::Add,
             var.clone(),
-            SymExpr::constant(ConstValue::I64(0))
+            SymExpr::constant(ConstValue::I64(0)),
         );
         let simplified = expr.simplify();
         assert_eq!(simplified, var);
@@ -1189,7 +1263,7 @@ mod tests {
     #[test]
     fn test_algebraic_simplification() {
         let var = SymExpr::variable("x".to_string());
-        
+
         // Test x - x = 0
         let expr = SymExpr::binary_op(BinOp::Sub, var.clone(), var.clone());
         let simplified = expr.simplify();
@@ -1211,7 +1285,7 @@ mod tests {
         let var = SymExpr::variable("x".to_string());
         let neg_var = SymExpr::unary_op(UnOp::Neg, var.clone());
         let double_neg = SymExpr::unary_op(UnOp::Neg, neg_var);
-        
+
         let simplified = double_neg.simplify();
         assert_eq!(simplified, var);
     }
@@ -1220,12 +1294,12 @@ mod tests {
     fn test_conditional_simplification() {
         let var = SymExpr::variable("x".to_string());
         let const_42 = SymExpr::constant(ConstValue::I64(42));
-        
+
         // Test if true then x else 42 = x
         let expr = SymExpr::conditional(
             SymExpr::constant(ConstValue::Bool(true)),
             var.clone(),
-            const_42.clone()
+            const_42.clone(),
         );
         let simplified = expr.simplify();
         assert_eq!(simplified, var);
@@ -1234,7 +1308,7 @@ mod tests {
         let expr = SymExpr::conditional(
             SymExpr::constant(ConstValue::Bool(false)),
             var.clone(),
-            const_42.clone()
+            const_42.clone(),
         );
         let simplified = expr.simplify();
         assert_eq!(simplified, const_42);
@@ -1249,13 +1323,13 @@ mod tests {
     #[test]
     fn test_hash_consing() {
         let table = ExpressionTable::new();
-        
+
         let expr1 = SymExpr::variable("x".to_string());
         let expr2 = SymExpr::variable("x".to_string());
-        
+
         let interned1 = table.intern(expr1);
         let interned2 = table.intern(expr2);
-        
+
         // Should be the same instance due to hash-consing
         assert_eq!(interned1, interned2);
         assert_eq!(table.size(), 1);
@@ -1266,7 +1340,7 @@ mod tests {
         let expr1 = SymExpr::variable("x".to_string());
         let expr2 = SymExpr::variable("x".to_string());
         let expr3 = SymExpr::variable("y".to_string());
-        
+
         assert_eq!(expr1.canonical_hash(), expr2.canonical_hash());
         assert_ne!(expr1.canonical_hash(), expr3.canonical_hash());
     }
@@ -1281,7 +1355,7 @@ mod tests {
         let expr = SymExpr::binary_op(
             BinOp::Add,
             var.clone(),
-            SymExpr::constant(ConstValue::I64(0))
+            SymExpr::constant(ConstValue::I64(0)),
         );
         assert!(!expr.is_simplified());
 
@@ -1294,34 +1368,34 @@ mod tests {
     // **Validates: Requirements 2.2**
     #[qc]
     fn prop_operation_precedence_preservation(
-        op1: BinOp, 
-        op2: BinOp, 
-        a: ConstValue, 
-        b: ConstValue, 
-        c: ConstValue
+        op1: BinOp,
+        op2: BinOp,
+        a: ConstValue,
+        b: ConstValue,
+        c: ConstValue,
     ) -> bool {
         // Test that precedence is preserved in expression construction
         // For expression: a op1 b op2 c
         // The precedence should determine the structure
-        
+
         let expr_a = SymExpr::constant(a);
         let expr_b = SymExpr::constant(b);
         let expr_c = SymExpr::constant(c);
-        
+
         // Create nested expression: (a op1 b) op2 c
         let left_first = SymExpr::binary_op(
             op2,
             SymExpr::binary_op(op1, expr_a.clone(), expr_b.clone()),
-            expr_c.clone()
+            expr_c.clone(),
         );
-        
+
         // Create nested expression: a op1 (b op2 c)
         let right_first = SymExpr::binary_op(
             op1,
             expr_a.clone(),
-            SymExpr::binary_op(op2, expr_b.clone(), expr_c.clone())
+            SymExpr::binary_op(op2, expr_b.clone(), expr_c.clone()),
         );
-        
+
         // The expressions should be different unless the operations have the same precedence
         if op1.precedence() == op2.precedence() {
             // Same precedence - both structures are valid
@@ -1336,28 +1410,28 @@ mod tests {
     fn prop_precedence_ordering_consistency(op1: BinOp, op2: BinOp) -> bool {
         let prec1 = op1.precedence();
         let prec2 = op2.precedence();
-        
+
         // Precedence should be consistent with mathematical conventions
         // Higher precedence operations should bind tighter
-        
+
         // Test some known precedence relationships
         match (op1, op2) {
             // Multiplication should have higher precedence than addition
             (BinOp::Mul, BinOp::Add) => prec1 > prec2,
             (BinOp::Add, BinOp::Mul) => prec1 < prec2,
-            
+
             // Division should have same precedence as multiplication
             (BinOp::Div, BinOp::Mul) => prec1 == prec2,
             (BinOp::Mul, BinOp::Div) => prec1 == prec2,
-            
+
             // Addition and subtraction should have same precedence
             (BinOp::Add, BinOp::Sub) => prec1 == prec2,
             (BinOp::Sub, BinOp::Add) => prec1 == prec2,
-            
+
             // Comparison operations should have lower precedence than arithmetic
             (BinOp::Lt, BinOp::Add) => prec1 < prec2,
             (BinOp::Add, BinOp::Lt) => prec1 > prec2,
-            
+
             _ => true, // For other combinations, just check consistency
         }
     }
@@ -1368,30 +1442,30 @@ mod tests {
         low_prec_op: BinOp,
         a: ConstValue,
         b: ConstValue,
-        c: ConstValue
+        c: ConstValue,
     ) -> bool {
         // Skip if precedence relationship is not as expected
         if high_prec_op.precedence() <= low_prec_op.precedence() {
             return true; // Skip this test case
         }
-        
+
         let expr_a = SymExpr::constant(a);
         let expr_b = SymExpr::constant(b);
         let expr_c = SymExpr::constant(c);
-        
+
         // For expression a low_prec_op b high_prec_op c
         // Should be parsed as a low_prec_op (b high_prec_op c)
         let expected_structure = SymExpr::binary_op(
             low_prec_op,
             expr_a.clone(),
-            SymExpr::binary_op(high_prec_op, expr_b.clone(), expr_c.clone())
+            SymExpr::binary_op(high_prec_op, expr_b.clone(), expr_c.clone()),
         );
-        
+
         // The high precedence operation should be nested deeper
         match &expected_structure {
             SymExpr::BinaryOp(outer_op, _left, right) => {
-                *outer_op == low_prec_op && 
-                matches!(**right, SymExpr::BinaryOp(inner_op, _, _) if inner_op == high_prec_op)
+                *outer_op == low_prec_op
+                    && matches!(**right, SymExpr::BinaryOp(inner_op, _, _) if inner_op == high_prec_op)
             }
             _ => false,
         }
@@ -1400,7 +1474,7 @@ mod tests {
     #[test]
     fn test_precedence_specific_cases() {
         // Test specific precedence cases that should always hold
-        
+
         // 2 + 3 * 4 should be parsed as 2 + (3 * 4), not (2 + 3) * 4
         let expr = SymExpr::binary_op(
             BinOp::Add,
@@ -1408,20 +1482,20 @@ mod tests {
             SymExpr::binary_op(
                 BinOp::Mul,
                 SymExpr::constant(ConstValue::I64(3)),
-                SymExpr::constant(ConstValue::I64(4))
-            )
+                SymExpr::constant(ConstValue::I64(4)),
+            ),
         );
-        
+
         // This should simplify to 2 + 12 = 14
         let simplified = expr.simplify();
         assert_eq!(simplified, SymExpr::constant(ConstValue::I64(14)));
-        
+
         // Test that multiplication has higher precedence than addition
         assert!(BinOp::Mul.precedence() > BinOp::Add.precedence());
-        
+
         // Test that shift operations have lower precedence than multiplication
         assert!(BinOp::Shl.precedence() < BinOp::Mul.precedence());
-        
+
         // Test that comparison operations have lowest precedence
         assert!(BinOp::Lt.precedence() < BinOp::Add.precedence());
     }
