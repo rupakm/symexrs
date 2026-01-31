@@ -707,49 +707,56 @@ impl SymExManager {
     }
 
     /// Fast satisfiability check using concrete values (concolic execution optimization)
-    /// 
+    ///
     /// This method evaluates all path constraints using concrete values to quickly
     /// determine if the current path is satisfiable without calling the SMT solver.
     /// Returns:
     /// - Some(true) if all constraints are satisfied by concrete values
     /// - Some(false) if any constraint is violated by concrete values
     /// - None if concrete values are not available for all variables
-    pub fn fast_check_satisfiable_with_concrete(&self, concrete_values: &HashMap<String, u64>) -> Option<bool> {
+    pub fn fast_check_satisfiable_with_concrete(
+        &self,
+        concrete_values: &HashMap<String, u64>,
+    ) -> Option<bool> {
         // Try to evaluate each constraint with concrete values
         for constraint in &self.path_constraints {
             match self.evaluate_constraint_concrete(constraint, concrete_values) {
-                Some(true) => continue,  // Constraint satisfied
-                Some(false) => return Some(false),  // Constraint violated - path is unsat
-                None => return None,  // Can't evaluate - need SMT solver
+                Some(true) => continue,            // Constraint satisfied
+                Some(false) => return Some(false), // Constraint violated - path is unsat
+                None => return None,               // Can't evaluate - need SMT solver
             }
         }
-        
+
         // All constraints satisfied
         Some(true)
     }
 
     /// Evaluate a single constraint using concrete values
     /// Returns Some(true) if satisfied, Some(false) if violated, None if can't evaluate
-    fn evaluate_constraint_concrete(&self, constraint: &SymExpr, concrete_values: &HashMap<String, u64>) -> Option<bool> {
+    fn evaluate_constraint_concrete(
+        &self,
+        constraint: &SymExpr,
+        concrete_values: &HashMap<String, u64>,
+    ) -> Option<bool> {
         use crate::expressions::{BinOp, ConstValue};
-        
+
         match constraint {
             SymExpr::Constant(val) => match val {
                 ConstValue::Bool(b) => Some(*b),
-                _ => None,  // Non-boolean constant in constraint position
+                _ => None, // Non-boolean constant in constraint position
             },
-            
+
             SymExpr::Variable(_name) => {
                 // For boolean variables, we'd need to look them up
                 // For now, return None (can't evaluate)
                 None
             }
-            
+
             SymExpr::BinaryOp(op, left, right) => {
                 // Try to evaluate both sides to u64 values
                 let left_val = self.evaluate_expr_to_u64(left, concrete_values)?;
                 let right_val = self.evaluate_expr_to_u64(right, concrete_values)?;
-                
+
                 // Evaluate the comparison
                 Some(match op {
                     BinOp::Eq => left_val == right_val,
@@ -758,10 +765,10 @@ impl SymExManager {
                     BinOp::Le => left_val <= right_val,
                     BinOp::Gt => left_val > right_val,
                     BinOp::Ge => left_val >= right_val,
-                    _ => return None,  // Not a comparison operator
+                    _ => return None, // Not a comparison operator
                 })
             }
-            
+
             SymExpr::UnaryOp(op, expr) => {
                 use crate::expressions::UnOp;
                 match op {
@@ -772,7 +779,7 @@ impl SymExManager {
                     _ => None,
                 }
             }
-            
+
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 let cond_val = self.evaluate_constraint_concrete(cond, concrete_values)?;
                 if cond_val {
@@ -785,9 +792,13 @@ impl SymExManager {
     }
 
     /// Evaluate an expression to a u64 value using concrete values
-    fn evaluate_expr_to_u64(&self, expr: &SymExpr, concrete_values: &HashMap<String, u64>) -> Option<u64> {
+    fn evaluate_expr_to_u64(
+        &self,
+        expr: &SymExpr,
+        concrete_values: &HashMap<String, u64>,
+    ) -> Option<u64> {
         use crate::expressions::{BinOp, ConstValue};
-        
+
         match expr {
             SymExpr::Constant(val) => match val {
                 ConstValue::U64(v) => Some(*v),
@@ -796,13 +807,13 @@ impl SymExManager {
                 ConstValue::I32(v) => Some(*v as u64),
                 _ => None,
             },
-            
+
             SymExpr::Variable(name) => concrete_values.get(name).copied(),
-            
+
             SymExpr::BinaryOp(op, left, right) => {
                 let left_val = self.evaluate_expr_to_u64(left, concrete_values)?;
                 let right_val = self.evaluate_expr_to_u64(right, concrete_values)?;
-                
+
                 Some(match op {
                     BinOp::Add => left_val.wrapping_add(right_val),
                     BinOp::Sub => left_val.wrapping_sub(right_val),
@@ -817,7 +828,7 @@ impl SymExManager {
                     _ => return None,
                 })
             }
-            
+
             SymExpr::UnaryOp(op, inner) => {
                 use crate::expressions::UnOp;
                 let val = self.evaluate_expr_to_u64(inner, concrete_values)?;
@@ -826,7 +837,7 @@ impl SymExManager {
                     _ => None,
                 }
             }
-            
+
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 let cond_val = self.evaluate_constraint_concrete(cond, concrete_values)?;
                 if cond_val {

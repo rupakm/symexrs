@@ -3,7 +3,7 @@
 //! This example shows how the symbolic execution engine automatically
 //! explores all paths when encountering symbolic comparisons.
 
-use rust_project::{explore_default, SymU64};
+use rust_project::{SymU64, explore_default};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,8 +24,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("Paths explored: {}", result.exploration_result.paths_explored);
-    println!("Satisfiable paths: {}", result.exploration_result.satisfiable_paths);
+    println!(
+        "Paths explored: {}",
+        result.exploration_result.paths_explored
+    );
+    println!(
+        "Satisfiable paths: {}",
+        result.exploration_result.satisfiable_paths
+    );
     println!();
 
     // Example 2: Multiple branches
@@ -50,7 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("Paths explored: {} (2^2 = 4 paths)", result.exploration_result.paths_explored);
+    println!(
+        "Paths explored: {} (2^2 = 4 paths)",
+        result.exploration_result.paths_explored
+    );
     println!();
 
     // Example 3: Nested branches
@@ -75,7 +84,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("Paths explored: {} (3 paths: x==0&&y==1, x==0&&y!=1, x!=0)", result.exploration_result.paths_explored);
+    println!(
+        "Paths explored: {} (3 paths: x==0&&y==1, x==0&&y!=1, x!=0)",
+        result.exploration_result.paths_explored
+    );
     println!();
 
     // Example 4: Constraints with branches
@@ -96,8 +108,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("Paths explored: {}", result.exploration_result.paths_explored);
-    println!("Satisfiable paths: {}", result.exploration_result.satisfiable_paths);
+    println!(
+        "Paths explored: {}",
+        result.exploration_result.paths_explored
+    );
+    println!(
+        "Satisfiable paths: {}",
+        result.exploration_result.satisfiable_paths
+    );
     println!();
 
     // Example 5: Unsatisfiable path
@@ -118,9 +136,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })?;
 
-    println!("Paths explored: {}", result.exploration_result.paths_explored);
-    println!("Satisfiable paths: {}", result.exploration_result.satisfiable_paths);
-    println!("Unsatisfiable paths: {}", result.exploration_result.unsatisfiable_paths);
+    println!(
+        "Paths explored: {}",
+        result.exploration_result.paths_explored
+    );
+    println!(
+        "Satisfiable paths: {}",
+        result.exploration_result.satisfiable_paths
+    );
+    println!(
+        "Unsatisfiable paths: {}",
+        result.exploration_result.unsatisfiable_paths
+    );
     println!();
 
     println!("=== Demo Complete ===");

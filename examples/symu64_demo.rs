@@ -3,8 +3,8 @@
 //! This example shows how to use SymU64 for symbolic execution
 //! with arithmetic operations and constraint tracking.
 
-use rust_project::{get_global_manager, init_global};
 use rust_project::symbolic_types::SymU64;
+use rust_project::{get_global_manager, init_global};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -4,7 +4,7 @@
 //! (e.g., SymU64, SymI32) that maintain the same interface while building
 //! symbolic expressions during execution.
 
-use crate::expressions::{BinOp, ConstValue, SymExpr};
+use crate::expressions::{BinOp, ConstValue, SymExpr, UnOp};
 use crate::manager::{SymExManager, TypeInfo};
 use std::cmp::Ordering;
 use std::convert::{From, TryFrom};
@@ -15,16 +15,16 @@ use std::sync::{Arc, Mutex};
 thread_local! {
     /// Track whether we're in symbolic execution mode
     static SYMBOLIC_MODE: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
-    
+
     /// Track branch decisions for the current path
     static BRANCH_DECISIONS: std::cell::RefCell<Vec<bool>> = std::cell::RefCell::new(Vec::new());
-    
+
     /// Current position in branch decisions
     static BRANCH_INDEX: std::cell::RefCell<usize> = std::cell::RefCell::new(0);
-    
+
     /// Track if we encountered a branch without a decision (new branch)
     static NEW_BRANCH_ENCOUNTERED: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
-    
+
     /// Track if the current path became unsatisfiable
     static PATH_UNSATISFIABLE: std::cell::RefCell<bool> = std::cell::RefCell::new(false);
 }
@@ -146,8 +146,7 @@ impl SymU64 {
 
     /// Create a new symbolic u64 using the global thread-local manager
     pub fn new_global() -> Self {
-        let manager = crate::get_global_manager()
-            .expect("Failed to get global manager");
+        let manager = crate::get_global_manager().expect("Failed to get global manager");
         Self::new(manager)
     }
 
@@ -565,7 +564,7 @@ impl PartialEq for SymU64 {
         if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
             return a == b;
         }
-        
+
         // If we're in symbolic mode, this creates a branch point
         if is_symbolic_mode() {
             // Check if we have a predetermined branch decision
@@ -576,31 +575,31 @@ impl PartialEq for SymU64 {
                 } else {
                     self.ne_constraint(other)
                 };
-                
+
                 // Add constraint and check satisfiability immediately
                 let mut mgr = self.manager.lock().unwrap();
                 let _ = mgr.add_constraint(constraint);
-                
+
                 // OPTIMIZATION: Early unsatisfiability detection
                 // Check if the path is still satisfiable after adding this constraint
                 if let Ok(is_sat) = mgr.is_satisfiable() {
                     if !is_sat {
                         // Path became unsatisfiable - mark it
-                        drop(mgr);  // Release lock before calling mark function
+                        drop(mgr); // Release lock before calling mark function
                         mark_path_unsatisfiable();
                     }
                 }
-                
+
                 return decision;
             }
-            
+
             // No predetermined decision - this is the first time we're seeing this branch
             // We'll return the concrete result if available, or false as default
             // The explore function will re-execute with both true and false
             if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
                 return a == b;
             }
-            
+
             // For purely symbolic values, we need to make a choice
             // Return false by default (explore will try both)
             false
@@ -629,7 +628,7 @@ impl Ord for SymU64 {
         if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
             return a.cmp(&b);
         }
-        
+
         // If we're in symbolic mode, comparisons create branch points
         if is_symbolic_mode() {
             // For Ord, we need to return an Ordering, but we can't easily fork on 3 outcomes
@@ -886,8 +885,7 @@ impl Shr<&SymU64> for &SymU64 {
 impl From<u64> for SymU64 {
     fn from(value: u64) -> Self {
         // Use the global thread-local manager
-        let manager = crate::get_global_manager()
-            .expect("Failed to get global manager");
+        let manager = crate::get_global_manager().expect("Failed to get global manager");
         SymU64::from_concrete(value, manager)
     }
 }
@@ -914,8 +912,579 @@ pub struct SymI32 {
     // Will contain symbolic variable identifier and manager reference
 }
 
+/// Symbolic boolean type
+///
+/// This type implements boolean logic operations while building symbolic
+/// expressions during execution. It maintains a reference to the global
+/// SymExManager for constraint tracking.
+///
+/// # Important: Using in if statements
+///
+/// Unlike regular `bool`, you cannot write `if sym_bool { ... }` directly.
+/// Instead, use one of these approaches:
+///
+/// ```ignore
+/// // Approach 1: Use is_true() method (recommended)
+/// if result.is_true() {
+///     // Path where result is true
+/// }
+///
+/// // Approach 2: Use holds() for natural reading
+/// if condition.holds() {
+///     // Path where condition is true
+/// }
+///
+/// // Approach 3: Explicit comparison
+/// let true_val = SymBool::from_concrete(true, manager);
+/// if result == true_val {
+///     // Path where result is true
+/// }
+/// ```
+///
+/// All three approaches trigger path forking in symbolic execution.
+#[derive(Clone)]
 pub struct SymBool {
-    // Will contain symbolic variable identifier and manager reference
+    /// Unique symbolic variable identifier
+    variable_name: String,
+    /// Symbolic expression representing this value
+    expr: SymExpr,
+    /// Optional concrete value for concolic execution
+    concrete_value: Option<bool>,
+    /// Reference to the global symbolic execution manager
+    manager: Arc<Mutex<SymExManager>>,
+}
+
+impl SymBool {
+    /// Create a new symbolic bool with a fresh variable name
+    pub fn new(manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("bool")
+        };
+
+        let expr = SymExpr::Variable(variable_name.clone());
+
+        // Register the variable with the manager
+        {
+            let mut mgr = manager.lock().unwrap();
+            let type_info = TypeInfo {
+                type_name: "bool".to_string(),
+                bit_width: None,
+                is_signed: false,
+                creation_site: None,
+            };
+            let _ = mgr.register_variable(variable_name.clone(), type_info);
+        }
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Create a new symbolic bool using the global thread-local manager
+    pub fn new_global() -> Self {
+        let manager = crate::get_global_manager().expect("Failed to get global manager");
+        Self::new(manager)
+    }
+
+    /// Create a new symbolic bool with a specific variable name
+    pub fn with_name(name: String, manager: Arc<Mutex<SymExManager>>) -> Self {
+        let expr = SymExpr::Variable(name.clone());
+
+        // Register the variable with the manager
+        {
+            let mut mgr = manager.lock().unwrap();
+            let type_info = TypeInfo {
+                type_name: "bool".to_string(),
+                bit_width: None,
+                is_signed: false,
+                creation_site: None,
+            };
+            let _ = mgr.register_variable(name.clone(), type_info);
+        }
+
+        Self {
+            variable_name: name,
+            expr,
+            concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Create a symbolic bool from a concrete value
+    pub fn from_concrete(value: bool, manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("bool")
+        };
+
+        let expr = SymExpr::Constant(ConstValue::Bool(value));
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: Some(value),
+            manager,
+        }
+    }
+
+    /// Create a symbolic bool from an existing expression
+    pub fn from_expr(expr: SymExpr, manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("bool")
+        };
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Get the symbolic expression representing this value
+    pub fn expr(&self) -> &SymExpr {
+        &self.expr
+    }
+
+    /// Get the variable name
+    pub fn variable_name(&self) -> &str {
+        &self.variable_name
+    }
+
+    /// Get the concrete value if available
+    pub fn concrete_value(&self) -> Option<bool> {
+        self.concrete_value
+    }
+
+    /// Set the concrete value (for concolic execution updates)
+    pub fn set_concrete_value(&mut self, value: bool) {
+        self.concrete_value = Some(value);
+    }
+
+    /// Update concrete value from a model (for concolic execution)
+    /// Returns true if the value was updated
+    pub fn update_from_model(&mut self, model: &crate::solver::Model) -> bool {
+        if let Some(value) = model.get_bool_value(&self.variable_name) {
+            self.concrete_value = Some(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get a reference to the manager
+    pub fn manager(&self) -> Arc<Mutex<SymExManager>> {
+        Arc::clone(&self.manager)
+    }
+
+    /// Generate an equality constraint
+    pub fn eq_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::Eq, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a not-equal constraint
+    pub fn ne_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::Ne, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate an AND constraint
+    pub fn and_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::BitAnd, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate an OR constraint
+    pub fn or_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::BitOr, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a NOT constraint
+    pub fn not_constraint(&self) -> SymExpr {
+        SymExpr::unary_op(UnOp::Not, self.expr.clone())
+    }
+
+    /// Add an equality constraint to the manager
+    pub fn assert_eq(&self, other: &Self) -> crate::SymExResult<()> {
+        let constraint = self.eq_constraint(other);
+        let mut mgr = self.manager.lock().unwrap();
+        mgr.add_constraint(constraint)
+    }
+
+    /// Add a not-equal constraint to the manager
+    pub fn assert_ne(&self, other: &Self) -> crate::SymExResult<()> {
+        let constraint = self.ne_constraint(other);
+        let mut mgr = self.manager.lock().unwrap();
+        mgr.add_constraint(constraint)
+    }
+
+    /// Assert this boolean is true
+    pub fn assert_true(&self) -> crate::SymExResult<()> {
+        let true_val = Self::from_concrete(true, Arc::clone(&self.manager));
+        self.assert_eq(&true_val)
+    }
+
+    /// Assert this boolean is false
+    pub fn assert_false(&self) -> crate::SymExResult<()> {
+        let false_val = Self::from_concrete(false, Arc::clone(&self.manager));
+        self.assert_eq(&false_val)
+    }
+
+    /// Check if this symbolic bool is true (triggers path forking)
+    ///
+    /// This is equivalent to: `self == SymBool::from_concrete(true, manager)`
+    /// but more ergonomic for use in if statements.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = &a & &b;
+    /// if result.is_true() {
+    ///     // Path where (a AND b) is true
+    /// } else {
+    ///     // Path where (a AND b) is false
+    /// }
+    /// ```
+    pub fn is_true(&self) -> bool {
+        let true_val = Self::from_concrete(true, Arc::clone(&self.manager));
+        self == &true_val
+    }
+
+    /// Check if this symbolic bool is false (triggers path forking)
+    pub fn is_false(&self) -> bool {
+        let false_val = Self::from_concrete(false, Arc::clone(&self.manager));
+        self == &false_val
+    }
+
+    /// Use this symbolic boolean as a condition (triggers path forking)
+    ///
+    /// This is an alias for `is_true()` for more natural reading.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let condition = &a | &b;
+    /// if condition.holds() {
+    ///     // Path where condition is true
+    /// }
+    /// ```
+    pub fn holds(&self) -> bool {
+        self.is_true()
+    }
+
+    /// Create an implication: self => other (equivalent to !self || other)
+    pub fn implies(&self, other: &Self) -> SymBool {
+        let not_self = !self;
+        &not_self | other
+    }
+
+    /// Create a bi-implication: self <=> other
+    /// Equivalent to (self => other) && (other => self)
+    pub fn iff(&self, other: &Self) -> SymBool {
+        let forward = self.implies(other);
+        let backward = other.implies(self);
+        &forward & &backward
+    }
+
+    /// Create a conditional expression: if self then then_val else else_val
+    pub fn if_then_else(&self, then_val: &Self, else_val: &Self) -> SymBool {
+        let expr = SymExpr::conditional(
+            self.expr.clone(),
+            then_val.expr.clone(),
+            else_val.expr.clone(),
+        );
+
+        let concrete_value = match (
+            self.concrete_value,
+            then_val.concrete_value,
+            else_val.concrete_value,
+        ) {
+            (Some(cond), Some(t), Some(e)) => Some(if cond { t } else { e }),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement Debug trait for SymBool
+impl fmt::Debug for SymBool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SymBool")
+            .field("variable_name", &self.variable_name)
+            .field("expr", &self.expr)
+            .field("concrete_value", &self.concrete_value)
+            .finish()
+    }
+}
+
+// Implement BitAnd trait for SymBool (logical AND)
+impl BitAnd for SymBool {
+    type Output = SymBool;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitAnd, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a && b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: self.manager,
+        }
+    }
+}
+
+// Implement BitAnd trait for &SymBool
+impl BitAnd for &SymBool {
+    type Output = SymBool;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitAnd, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a && b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement BitOr trait for SymBool (logical OR)
+impl BitOr for SymBool {
+    type Output = SymBool;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitOr, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a || b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: self.manager,
+        }
+    }
+}
+
+// Implement BitOr trait for &SymBool
+impl BitOr for &SymBool {
+    type Output = SymBool;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitOr, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a || b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement BitXor trait for SymBool (logical XOR)
+impl BitXor for SymBool {
+    type Output = SymBool;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitXor, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a ^ b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: self.manager,
+        }
+    }
+}
+
+// Implement BitXor trait for &SymBool
+impl BitXor for &SymBool {
+    type Output = SymBool;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        let expr = SymExpr::binary_op(BinOp::BitXor, self.expr.clone(), rhs.expr.clone());
+        let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+            (Some(a), Some(b)) => Some(a ^ b),
+            _ => None,
+        };
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement Not trait for SymBool (logical negation)
+impl std::ops::Not for SymBool {
+    type Output = SymBool;
+
+    fn not(self) -> Self::Output {
+        let expr = SymExpr::unary_op(UnOp::Not, self.expr.clone());
+        let concrete_value = self.concrete_value.map(|v| !v);
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: self.manager,
+        }
+    }
+}
+
+// Implement Not trait for &SymBool
+impl std::ops::Not for &SymBool {
+    type Output = SymBool;
+
+    fn not(self) -> Self::Output {
+        let expr = SymExpr::unary_op(UnOp::Not, self.expr.clone());
+        let concrete_value = self.concrete_value.map(|v| !v);
+
+        SymBool {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("bool")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement PartialEq trait for SymBool
+impl PartialEq for SymBool {
+    fn eq(&self, other: &Self) -> bool {
+        // If we have concrete values for both, use them
+        if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
+            return a == b;
+        }
+
+        // If we're in symbolic mode, this creates a branch point
+        if is_symbolic_mode() {
+            // Check if we have a predetermined branch decision
+            if let Some(decision) = get_next_branch_decision() {
+                // Add the appropriate constraint to the manager
+                let constraint = if decision {
+                    self.eq_constraint(other)
+                } else {
+                    self.ne_constraint(other)
+                };
+
+                // Add constraint and check satisfiability immediately
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+
+                // OPTIMIZATION: Early unsatisfiability detection
+                // Check if the path is still satisfiable after adding this constraint
+                if let Ok(is_sat) = mgr.is_satisfiable() {
+                    if !is_sat {
+                        // Path became unsatisfiable - mark it
+                        drop(mgr); // Release lock before calling mark function
+                        mark_path_unsatisfiable();
+                    }
+                }
+
+                return decision;
+            }
+
+            // No predetermined decision - this is the first time we're seeing this branch
+            // We'll return the concrete result if available, or false as default
+            // The explore function will re-execute with both true and false
+            if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
+                return a == b;
+            }
+
+            // For purely symbolic values, we need to make a choice
+            // Return false by default (explore will try both)
+            false
+        } else {
+            // Not in symbolic mode - just do structural equality
+            self.expr == other.expr
+        }
+    }
+}
+
+// Implement Eq trait for SymBool
+impl Eq for SymBool {}
+
+// Implement From<bool> for SymBool
+impl From<bool> for SymBool {
+    fn from(value: bool) -> Self {
+        let manager = crate::get_global_manager().expect("Failed to get global manager");
+        SymBool::from_concrete(value, manager)
+    }
+}
+
+// Implement TryFrom<SymBool> for bool
+impl TryFrom<SymBool> for bool {
+    type Error = &'static str;
+
+    fn try_from(value: SymBool) -> Result<Self, Self::Error> {
+        value.concrete_value.ok_or("No concrete value available")
+    }
+}
+
+// Implement TryFrom<&SymBool> for bool
+impl TryFrom<&SymBool> for bool {
+    type Error = &'static str;
+
+    fn try_from(value: &SymBool) -> Result<Self, Self::Error> {
+        value.concrete_value.ok_or("No concrete value available")
+    }
 }
 
 // Additional symbolic types will be added in later tasks
@@ -1207,10 +1776,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Lt, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Lt, _, _)));
     }
 
     #[test]
@@ -1227,10 +1793,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Le, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Le, _, _)));
     }
 
     #[test]
@@ -1247,10 +1810,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Gt, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Gt, _, _)));
     }
 
     #[test]
@@ -1267,10 +1827,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Ge, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Ge, _, _)));
     }
 
     #[test]
@@ -1287,10 +1844,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Eq, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Eq, _, _)));
     }
 
     #[test]
@@ -1307,10 +1861,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let constraints = mgr.get_constraints();
         assert_eq!(constraints.len(), 1);
-        assert!(matches!(
-            constraints[0],
-            SymExpr::BinaryOp(BinOp::Ne, _, _)
-        ));
+        assert!(matches!(constraints[0], SymExpr::BinaryOp(BinOp::Ne, _, _)));
     }
 
     #[test]

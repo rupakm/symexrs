@@ -3,12 +3,8 @@
 //! This example shows complete coverage of relational operations:
 //! ==, !=, <, <=, >, >=
 
+use rust_project::{SymExManager, SymExResult, solver::Z3Solver, symbolic_types::SymU64};
 use std::sync::{Arc, Mutex};
-use rust_project::{
-    SymExManager, SymExResult,
-    solver::Z3Solver,
-    symbolic_types::SymU64,
-};
 
 fn main() -> SymExResult<()> {
     println!("=== Relational Operations Coverage Demo ===\n");
@@ -45,7 +41,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ x.assert_eq(&y)  → Added constraint: x == y");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     // Test assert_ne
@@ -57,7 +56,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ x.assert_ne(&y)  → Added constraint: x != y");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     // Test assert_lt
@@ -69,7 +71,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ x.assert_lt(&y)  → Added constraint: x < y");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     // Test assert_le (NEW!)
@@ -81,7 +86,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ x.assert_le(&y)  → Added constraint: x <= y ✨ NEW");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     // Test assert_gt
@@ -93,7 +101,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ y.assert_gt(&x)  → Added constraint: y > x");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     // Test assert_ge (NEW!)
@@ -105,7 +116,10 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         println!("   ✓ y.assert_ge(&x)  → Added constraint: y >= x ✨ NEW");
-        println!("     Constraints in manager: {}", mgr.get_constraints().len());
+        println!(
+            "     Constraints in manager: {}",
+            mgr.get_constraints().len()
+        );
     }
 
     println!();
@@ -123,13 +137,13 @@ fn main() -> SymExResult<()> {
 
     println!("   Variables: a=5, b=10, c=15");
     println!("   Adding constraints:");
-    
+
     a.assert_le(&b)?;
     println!("     ✓ a <= b");
-    
+
     b.assert_le(&c)?;
     println!("     ✓ b <= c");
-    
+
     a.assert_lt(&c)?;
     println!("     ✓ a < c");
 
@@ -152,10 +166,10 @@ fn main() -> SymExResult<()> {
     let max = SymU64::from_concrete(100, Arc::clone(&manager));
 
     println!("   Constraining value to range [0, 100]:");
-    
+
     min.assert_le(&value)?;
     println!("     ✓ 0 <= value");
-    
+
     value.assert_le(&max)?;
     println!("     ✓ value <= 100");
 

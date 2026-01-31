@@ -21,10 +21,62 @@ pub use error::{SymExError, SymExResult};
 pub use expressions::{BinOp, ConstValue, SymExpr, UnOp};
 pub use manager::{ExecutionState, SymExManager, TypeInfo};
 pub use solver::{Model, SatResult, SmtSolver, Z3Solver};
-pub use symbolic_types::SymU64;
+pub use symbolic_types::{SymBool, SymU64};
 
 /// Version information
 pub const VERSION: &str = "0.1.0";
+
+/// Strategy for exploring execution paths
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorationStrategy {
+    /// Depth-first search: explore paths deeply before backtracking
+    DepthFirst,
+    /// Breadth-first search: explore all paths at same depth before going deeper
+    BreadthFirst,
+}
+
+/// Result of path exploration
+#[derive(Debug, Clone)]
+pub struct ExplorationResult {
+    /// Total number of paths explored
+    pub paths_explored: usize,
+    /// Number of satisfiable paths found
+    pub satisfiable_paths: usize,
+    /// Number of unsatisfiable paths found
+    pub unsatisfiable_paths: usize,
+    /// Maximum depth reached during exploration
+    pub max_depth_reached: usize,
+    /// Maximum number of variables in any path
+    pub max_variable_count: usize,
+    /// Maximum number of constraints in any path
+    pub max_constraint_count: usize,
+}
+
+impl ExplorationResult {
+    /// Calculate path coverage percentage (satisfiable paths / total paths)
+    pub fn coverage_percentage(&self) -> f64 {
+        if self.paths_explored == 0 {
+            0.0
+        } else {
+            (self.satisfiable_paths as f64 / self.paths_explored as f64) * 100.0
+        }
+    }
+
+    /// Get a summary string of the exploration results
+    pub fn summary(&self) -> String {
+        format!(
+            "Explored {} paths ({} satisfiable, {} unsatisfiable)\n\
+             Max depth: {}, Max variables: {}, Max constraints: {}, Coverage: {:.2}%",
+            self.paths_explored,
+            self.satisfiable_paths,
+            self.unsatisfiable_paths,
+            self.max_depth_reached,
+            self.max_variable_count,
+            self.max_constraint_count,
+            self.coverage_percentage()
+        )
+    }
+}
 
 /// Configuration for symbolic execution
 #[derive(Debug, Clone)]
@@ -171,13 +223,14 @@ pub fn explore<F>(config: ExploreConfig, f: F) -> SymExResult<ExploreResult>
 where
     F: Fn(&Arc<Mutex<SymExManager>>) -> SymExResult<()>,
 {
-    use crate::symbolic_types::{enable_symbolic_mode, disable_symbolic_mode, 
-                                 set_branch_decisions, reset_branch_tracking, 
-                                 new_branch_encountered, path_became_unsatisfiable};
-    
+    use crate::symbolic_types::{
+        disable_symbolic_mode, enable_symbolic_mode, new_branch_encountered,
+        path_became_unsatisfiable, reset_branch_tracking, set_branch_decisions,
+    };
+
     // Enable symbolic mode
     enable_symbolic_mode();
-    
+
     // We'll use a work queue to explore all paths
     let mut work_queue: Vec<Vec<bool>> = vec![vec![]]; // Start with empty branch decisions
     let mut all_paths = Vec::new();
@@ -186,129 +239,131 @@ where
     let mut unsatisfiable_paths = 0;
     let mut max_variable_count = 0;
     let mut max_constraint_count = 0;
-    let mut _early_terminations = 0;  // Track early unsatisfiability detections
-    
+    let mut _early_terminations = 0; // Track early unsatisfiability detections
+
     while let Some(branch_decisions) = work_queue.pop() {
-        if config.max_paths.map_or(false, |max| total_paths_explored >= max) {
+        if config
+            .max_paths
+            .map_or(false, |max| total_paths_explored >= max)
+        {
             break;
         }
-        
+
         if branch_decisions.len() > config.max_depth {
             continue;
         }
-        
+
         // Create a fresh manager for this path
         let solver = Box::new(Z3Solver::new()?);
         let mut manager = SymExManager::with_max_visits(solver, config.max_state_visits);
         manager.set_max_stack_size(config.max_stack_size);
         manager.set_compression_enabled(config.enable_compression);
         let manager_arc = Arc::new(Mutex::new(manager));
-        
+
         // Set as the global manager for this thread
         set_global_manager(Arc::clone(&manager_arc));
-        
+
         // Set the branch decisions for this path
         set_branch_decisions(branch_decisions.clone());
-        
+
         // Execute the user's function
         let execution_result = f(&manager_arc);
-        
+
         // OPTIMIZATION: Check if path became unsatisfiable during execution
         if path_became_unsatisfiable() {
             // Path was detected as unsatisfiable early - count it and skip
             total_paths_explored += 1;
             unsatisfiable_paths += 1;
             _early_terminations += 1;
-            
+
             // Still collect statistics for reporting
             let (variable_count, constraint_count) = {
                 let mgr = manager_arc.lock().unwrap();
                 let stats = mgr.get_stats();
                 (stats.variable_count, stats.constraint_count)
             };
-            
+
             max_variable_count = max_variable_count.max(variable_count);
             max_constraint_count = max_constraint_count.max(constraint_count);
-            
+
             all_paths.push((branch_decisions.clone(), constraint_count, false));
-            continue;  // Skip to next path
+            continue; // Skip to next path
         }
-        
+
         if execution_result.is_err() {
             continue;
         }
-        
+
         // Check if we encountered a new branch
         let encountered_new_branch = new_branch_encountered();
-        
+
         // Only count this path if we didn't encounter a new branch
         // (if we did, we'll re-execute with both branch outcomes)
         if !encountered_new_branch {
             total_paths_explored += 1;
-            
+
             // Check if this path is satisfiable
             // (may be redundant if early detection caught it, but handles other cases)
             let is_sat = {
                 let mut mgr = manager_arc.lock().unwrap();
                 mgr.is_satisfiable().unwrap_or(false)
             };
-            
+
             if is_sat {
                 satisfiable_paths += 1;
             } else {
                 unsatisfiable_paths += 1;
             }
-            
+
             // Collect statistics from this path
             let (variable_count, constraint_count) = {
                 let mgr = manager_arc.lock().unwrap();
                 let stats = mgr.get_stats();
                 (stats.variable_count, stats.constraint_count)
             };
-            
+
             // Track maximum values across all paths
             max_variable_count = max_variable_count.max(variable_count);
             max_constraint_count = max_constraint_count.max(constraint_count);
-            
+
             // Collect path information
             all_paths.push((branch_decisions.clone(), constraint_count, is_sat));
         }
-        
+
         // If we encountered a new branch, fork for both outcomes
         if encountered_new_branch {
             // Fork for both outcomes
             let mut true_branch = branch_decisions.clone();
             true_branch.push(true);
             work_queue.push(true_branch);
-            
+
             let mut false_branch = branch_decisions.clone();
             false_branch.push(false);
             work_queue.push(false_branch);
         }
     }
-    
+
     // Disable symbolic mode
     disable_symbolic_mode();
     reset_branch_tracking();
-    
+
     // Create final result
     let exploration_result = ExplorationResult {
         paths_explored: total_paths_explored,
         satisfiable_paths,
         unsatisfiable_paths,
-        looping_paths: 0,
         max_depth_reached: all_paths.iter().map(|(d, _, _)| d.len()).max().unwrap_or(0),
-        unique_states: all_paths.len(),
-        completed_paths: total_paths_explored,
+        max_variable_count,
+        max_constraint_count,
     };
-    
+
     let manager_stats = ManagerStats {
         variable_count: max_variable_count,
         constraint_count: max_constraint_count,
         paths_explored: total_paths_explored,
         cache_hit_rate: 0.0,
     };
-    
+
     Ok(ExploreResult {
         exploration_result,
         manager_stats,
@@ -352,7 +407,7 @@ pub fn init_global() -> SymExResult<()> {
 }
 
 /// Get a reference to the global symbolic execution manager
-/// 
+///
 /// This will automatically initialize the manager if it hasn't been initialized yet.
 /// Each thread has its own manager instance.
 pub fn get_global_manager() -> SymExResult<Arc<Mutex<SymExManager>>> {
@@ -399,15 +454,15 @@ mod tests {
     #[test]
     fn test_global_manager() {
         reset_global_manager();
-        
+
         // First access should auto-initialize
         let manager1 = get_global_manager();
         assert!(manager1.is_ok());
-        
+
         // Second access should return the same manager
         let manager2 = get_global_manager();
         assert!(manager2.is_ok());
-        
+
         // They should be the same Arc
         let m1 = manager1.unwrap();
         let m2 = manager2.unwrap();
@@ -417,10 +472,10 @@ mod tests {
     #[test]
     fn test_init_global() {
         reset_global_manager();
-        
+
         let result = init_global();
         assert!(result.is_ok());
-        
+
         let manager = get_global_manager();
         assert!(manager.is_ok());
     }
@@ -428,21 +483,21 @@ mod tests {
     #[test]
     fn test_reset_global_manager() {
         reset_global_manager();
-        
+
         let manager1 = get_global_manager().unwrap();
         let id1 = {
             let mgr = manager1.lock().unwrap();
             mgr.fresh_variable("test")
         };
-        
+
         reset_global_manager();
-        
+
         let manager2 = get_global_manager().unwrap();
         let id2 = {
             let mgr = manager2.lock().unwrap();
             mgr.fresh_variable("test")
         };
-        
+
         // After reset, we should get a new manager with fresh IDs
         assert_eq!(id1, "test_0");
         assert_eq!(id2, "test_0"); // New manager starts from 0 again
@@ -451,20 +506,20 @@ mod tests {
     #[test]
     fn test_explore_basic() {
         let config = ExploreConfig::default();
-        
+
         let result = explore(config, |manager| {
             // Create symbolic variables
             let x = SymU64::new(Arc::clone(manager));
             let y = SymU64::new(Arc::clone(manager));
-            
+
             // Add some constraints
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
             x.assert_gt(&zero)?;
             y.assert_gt(&zero)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -479,14 +534,14 @@ mod tests {
             .with_max_depth(50)
             .with_strategy(ExplorationStrategy::BreadthFirst)
             .with_compression(false);
-        
+
         let result = explore(config, |manager| {
             let x = SymU64::new(Arc::clone(manager));
             let ten = SymU64::from_concrete(10, Arc::clone(manager));
             x.assert_lt(&ten)?;
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -498,13 +553,13 @@ mod tests {
         let result = explore_default(|manager| {
             let x = SymU64::new(Arc::clone(manager));
             let y = SymU64::new(Arc::clone(manager));
-            
+
             // Create a simple constraint
             x.assert_eq(&y)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -517,16 +572,16 @@ mod tests {
             let a = SymU64::from_concrete(10, Arc::clone(manager));
             let b = SymU64::from_concrete(20, Arc::clone(manager));
             let c = SymU64::from_concrete(30, Arc::clone(manager));
-            
+
             // Perform operations
             let sum = &a + &b;
-            
+
             // Add constraint: sum == c
             sum.assert_eq(&c)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -538,14 +593,14 @@ mod tests {
         let result = explore_default(|manager| {
             let x = SymU64::new(Arc::clone(manager));
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
-            
+
             // Add contradictory constraints: x > 0 AND x < 0
             x.assert_gt(&zero)?;
             x.assert_lt(&zero)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -560,18 +615,18 @@ mod tests {
             let x = SymU64::new(Arc::clone(manager));
             let y = SymU64::new(Arc::clone(manager));
             let z = SymU64::new(Arc::clone(manager));
-            
+
             let ten = SymU64::from_concrete(10, Arc::clone(manager));
             let twenty = SymU64::from_concrete(20, Arc::clone(manager));
-            
+
             // Add constraints: x < 10, y > 10, z == 20
             x.assert_lt(&ten)?;
             y.assert_gt(&ten)?;
             z.assert_eq(&twenty)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -588,7 +643,7 @@ mod tests {
             .with_max_state_visits(50)
             .with_compression(true)
             .with_timeout(60);
-        
+
         assert_eq!(config.max_depth, 200);
         assert_eq!(config.max_paths, Some(1000));
         assert_eq!(config.strategy, ExplorationStrategy::DepthFirst);
@@ -600,19 +655,19 @@ mod tests {
     #[test]
     fn test_explore_uses_global_manager() {
         reset_global_manager();
-        
+
         let result = explore_default(|_manager| {
             // Use the global manager through SymU64::new_global()
             let x = SymU64::new_global();
             let y = SymU64::new_global();
-            
+
             let ten = SymU64::from_concrete(10, Arc::clone(&get_global_manager().unwrap()));
             x.assert_gt(&ten)?;
             y.assert_lt(&ten)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
@@ -623,20 +678,20 @@ mod tests {
         let result = explore_default(|manager| {
             let x = SymU64::new(Arc::clone(manager));
             let y = SymU64::new(Arc::clone(manager));
-            
+
             let five = SymU64::from_concrete(5, Arc::clone(manager));
             let ten = SymU64::from_concrete(10, Arc::clone(manager));
-            
+
             // x > 5 AND y < 10
             x.assert_gt(&five)?;
             y.assert_lt(&ten)?;
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
-        
+
         // Check that statistics are populated
         assert!(result.completed);
         assert!(result.manager_stats.variable_count > 0);
@@ -649,7 +704,7 @@ mod tests {
         let result = explore_default(|manager| {
             let x = SymU64::new(Arc::clone(manager));
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
-            
+
             // This comparison should fork execution into two paths
             if x == zero {
                 // Path 1: x == 0
@@ -658,14 +713,14 @@ mod tests {
                 // Path 2: x != 0
                 // Just add the constraint, don't do anything else
             }
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
-        
+
         // Should explore both paths (x == 0 and x != 0)
         assert_eq!(result.exploration_result.paths_explored, 2);
         assert_eq!(result.exploration_result.satisfiable_paths, 2);
@@ -677,28 +732,28 @@ mod tests {
             let x = SymU64::new(Arc::clone(manager));
             let y = SymU64::new(Arc::clone(manager));
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
-            
+
             // First branch: x == 0 or x != 0
             if x == zero {
                 x.assert_eq(&zero)?;
             } else {
                 x.assert_ne(&zero)?;
             }
-            
+
             // Second branch: y == 0 or y != 0
             if y == zero {
                 y.assert_eq(&zero)?;
             } else {
                 y.assert_ne(&zero)?;
             }
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
-        
+
         // Should explore 4 paths: (x==0,y==0), (x==0,y!=0), (x!=0,y==0), (x!=0,y!=0)
         assert_eq!(result.exploration_result.paths_explored, 4);
     }
@@ -709,13 +764,13 @@ mod tests {
             let x = SymU64::new(Arc::clone(manager));
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
             let one = SymU64::from_concrete(1, Arc::clone(manager));
-            
+
             // Branch on x == 0
             if x == zero {
                 // This path will become unsatisfiable immediately
                 // because we already have x == 0 from the branch
-                x.assert_eq(&one)?;  // Contradiction: x == 0 AND x == 1
-                
+                x.assert_eq(&one)?; // Contradiction: x == 0 AND x == 1
+
                 // These operations should NOT be executed due to early termination
                 let y = SymU64::new(Arc::clone(manager));
                 let z = SymU64::new(Arc::clone(manager));
@@ -724,14 +779,14 @@ mod tests {
                 // This path is satisfiable
                 x.assert_ne(&zero)?;
             }
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
-        
+
         // Should explore 2 paths
         assert_eq!(result.exploration_result.paths_explored, 2);
         // One satisfiable (x != 0), one unsatisfiable (x == 0 AND x == 1)
@@ -746,7 +801,7 @@ mod tests {
             let zero = SymU64::from_concrete(0, Arc::clone(manager));
             let one = SymU64::from_concrete(1, Arc::clone(manager));
             let two = SymU64::from_concrete(2, Arc::clone(manager));
-            
+
             if x == zero {
                 // Contradiction
                 x.assert_eq(&one)?;
@@ -758,16 +813,15 @@ mod tests {
                 x.assert_ne(&zero)?;
                 x.assert_ne(&one)?;
             }
-            
+
             Ok(())
         });
-        
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.completed);
-        
+
         // Should have more unsatisfiable than satisfiable paths
         assert!(result.exploration_result.unsatisfiable_paths >= 2);
     }
 }
-

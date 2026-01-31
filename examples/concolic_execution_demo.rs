@@ -4,13 +4,9 @@
 //! expressions to enable fast satisfiability checking without calling the
 //! SMT solver for every path.
 
+use rust_project::{SymExManager, SymExResult, solver::Z3Solver, symbolic_types::SymU64};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use rust_project::{
-    SymExManager, SymExResult,
-    solver::Z3Solver,
-    symbolic_types::SymU64,
-};
 
 fn main() -> SymExResult<()> {
     println!("=== Concolic Execution Demo ===\n");
@@ -33,7 +29,11 @@ fn main() -> SymExResult<()> {
     // Perform operations - concrete values are maintained
     let sum = &x + &y;
     println!("2. Operations maintain concrete values:");
-    println!("   x + y = {:?} (concrete: {:?})", sum.expr(), sum.concrete_value());
+    println!(
+        "   x + y = {:?} (concrete: {:?})",
+        sum.expr(),
+        sum.concrete_value()
+    );
     println!();
 
     // Add a constraint: x < y
@@ -53,7 +53,9 @@ fn main() -> SymExResult<()> {
     {
         let mgr = manager.lock().unwrap();
         match mgr.fast_check_satisfiable_with_concrete(&concrete_values) {
-            Some(true) => println!("   ✓ Path is satisfiable (checked with concrete values, no SMT call!)"),
+            Some(true) => {
+                println!("   ✓ Path is satisfiable (checked with concrete values, no SMT call!)")
+            }
             Some(false) => println!("   ✗ Path is unsatisfiable (detected with concrete values)"),
             None => println!("   ? Cannot determine with concrete values alone"),
         }
@@ -74,7 +76,9 @@ fn main() -> SymExResult<()> {
         let mgr = manager.lock().unwrap();
         match mgr.fast_check_satisfiable_with_concrete(&concrete_values) {
             Some(true) => println!("   ✓ Path is satisfiable"),
-            Some(false) => println!("   ✗ Path is unsatisfiable (detected immediately with concrete values!)"),
+            Some(false) => {
+                println!("   ✗ Path is unsatisfiable (detected immediately with concrete values!)")
+            }
             None => println!("   ? Cannot determine with concrete values alone"),
         }
     }
@@ -82,7 +86,7 @@ fn main() -> SymExResult<()> {
 
     // Demonstrate updating concrete values when exploring a new path
     println!("7. Exploring a new path - updating concrete values from SMT model");
-    
+
     // Clear constraints and start fresh
     {
         let mut mgr = manager.lock().unwrap();
@@ -91,13 +95,13 @@ fn main() -> SymExResult<()> {
 
     // Create a fresh symbolic variable (without concrete value initially)
     let mut z = SymU64::new(Arc::clone(&manager));
-    
+
     // Create a constant for comparison
     let fifteen = SymU64::from_concrete(15, Arc::clone(&manager));
 
     // Add constraint: z > 15
     let new_constraint = z.gt_constraint(&fifteen);
-    
+
     {
         let mut mgr = manager.lock().unwrap();
         mgr.add_constraint(new_constraint)?;
@@ -131,7 +135,10 @@ fn main() -> SymExResult<()> {
         } else {
             let updated = z.update_from_model(&model);
             if updated {
-                println!("   ✓ Updated z to {} (now satisfies z > 15)", z.concrete_value().unwrap());
+                println!(
+                    "   ✓ Updated z to {} (now satisfies z > 15)",
+                    z.concrete_value().unwrap()
+                );
             }
         }
         println!();
@@ -141,11 +148,16 @@ fn main() -> SymExResult<()> {
         if let Some(z_val) = z.concrete_value() {
             let mut updated_concrete = HashMap::new();
             updated_concrete.insert(z.variable_name().to_string(), z_val);
-            updated_concrete.insert(fifteen.variable_name().to_string(), fifteen.concrete_value().unwrap());
-            
+            updated_concrete.insert(
+                fifteen.variable_name().to_string(),
+                fifteen.concrete_value().unwrap(),
+            );
+
             let mgr = manager.lock().unwrap();
             match mgr.fast_check_satisfiable_with_concrete(&updated_concrete) {
-                Some(true) => println!("    ✓ Path is satisfiable (verified with updated concrete values!)"),
+                Some(true) => {
+                    println!("    ✓ Path is satisfiable (verified with updated concrete values!)")
+                }
                 Some(false) => println!("    ✗ Path is unsatisfiable"),
                 None => println!("    ? Cannot determine with concrete values alone"),
             }

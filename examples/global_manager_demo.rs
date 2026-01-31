@@ -3,7 +3,7 @@
 //! This example shows how to use the thread-local global manager
 //! for seamless symbolic execution without explicitly passing managers.
 
-use rust_project::{init_global, get_global_manager, reset_global_manager, SymU64};
+use rust_project::{SymU64, get_global_manager, init_global, reset_global_manager};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Global Manager Demo ===\n");
@@ -32,8 +32,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  x + y = {:?}", sum.expr());
 
     let product = &a * &b;
-    println!("  a * b = {:?} (concrete: {:?})", 
-             product.expr(), product.concrete_value());
+    println!(
+        "  a * b = {:?} (concrete: {:?})",
+        product.expr(),
+        product.concrete_value()
+    );
 
     // Add constraints using the new methods
     println!("\nAdding constraints:");
@@ -58,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut mgr = manager.lock().unwrap();
             mgr.get_model()?
         };
-        
+
         if let Some(model) = model {
             println!("\n  Found model:");
             for (var, value) in &model.assignments {
@@ -79,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demonstrate reset
     println!("\nResetting global manager...");
     reset_global_manager();
-    
+
     // After reset, new variables start from 0 again
     let z = SymU64::new_global();
     println!("  New variable after reset: {}", z.variable_name());
