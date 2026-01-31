@@ -186,6 +186,114 @@ impl fmt::Display for ConstValue {
     }
 }
 
+impl ConstValue {
+    /// Extract as u64 with casting
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            ConstValue::U64(v) => Some(*v),
+            ConstValue::I64(v) => Some(*v as u64),
+            ConstValue::U32(v) => Some(*v as u64),
+            ConstValue::I32(v) => Some(*v as u64),
+            ConstValue::U8(v) => Some(*v as u64),
+            ConstValue::F64(v) => Some(*v as u64),
+            ConstValue::F32(v) => Some(*v as u64),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as i64 with casting
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            ConstValue::U64(v) => Some(*v as i64),
+            ConstValue::I64(v) => Some(*v),
+            ConstValue::U32(v) => Some(*v as i64),
+            ConstValue::I32(v) => Some(*v as i64),
+            ConstValue::U8(v) => Some(*v as i64),
+            ConstValue::F64(v) => Some(*v as i64),
+            ConstValue::F32(v) => Some(*v as i64),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as u32 with casting
+    pub fn as_u32(&self) -> Option<u32> {
+        match self {
+            ConstValue::U64(v) => Some(*v as u32),
+            ConstValue::I64(v) => Some(*v as u32),
+            ConstValue::U32(v) => Some(*v),
+            ConstValue::I32(v) => Some(*v as u32),
+            ConstValue::U8(v) => Some(*v as u32),
+            ConstValue::F64(v) => Some(*v as u32),
+            ConstValue::F32(v) => Some(*v as u32),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as i32 with casting
+    pub fn as_i32(&self) -> Option<i32> {
+        match self {
+            ConstValue::U64(v) => Some(*v as i32),
+            ConstValue::I64(v) => Some(*v as i32),
+            ConstValue::U32(v) => Some(*v as i32),
+            ConstValue::I32(v) => Some(*v),
+            ConstValue::U8(v) => Some(*v as i32),
+            ConstValue::F64(v) => Some(*v as i32),
+            ConstValue::F32(v) => Some(*v as i32),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as u8 with casting
+    pub fn as_u8(&self) -> Option<u8> {
+        match self {
+            ConstValue::U64(v) => Some(*v as u8),
+            ConstValue::I64(v) => Some(*v as u8),
+            ConstValue::U32(v) => Some(*v as u8),
+            ConstValue::I32(v) => Some(*v as u8),
+            ConstValue::U8(v) => Some(*v),
+            ConstValue::F64(v) => Some(*v as u8),
+            ConstValue::F32(v) => Some(*v as u8),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as f64 with casting
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            ConstValue::U64(v) => Some(*v as f64),
+            ConstValue::I64(v) => Some(*v as f64),
+            ConstValue::U32(v) => Some(*v as f64),
+            ConstValue::I32(v) => Some(*v as f64),
+            ConstValue::U8(v) => Some(*v as f64),
+            ConstValue::F64(v) => Some(*v),
+            ConstValue::F32(v) => Some(*v as f64),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as f32 with casting
+    pub fn as_f32(&self) -> Option<f32> {
+        match self {
+            ConstValue::U64(v) => Some(*v as f32),
+            ConstValue::I64(v) => Some(*v as f32),
+            ConstValue::U32(v) => Some(*v as f32),
+            ConstValue::I32(v) => Some(*v as f32),
+            ConstValue::U8(v) => Some(*v as f32),
+            ConstValue::F64(v) => Some(*v as f32),
+            ConstValue::F32(v) => Some(*v),
+            ConstValue::Bool(_) => None,
+        }
+    }
+
+    /// Extract as bool (only works for Bool variant)
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ConstValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
 impl SymExpr {
     /// Create a new variable expression
     pub fn variable(name: String) -> Self {
@@ -532,6 +640,287 @@ impl SymExpr {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Evaluate the concrete value of this expression given variable bindings
+    ///
+    /// This method recursively evaluates the expression tree using the provided
+    /// mapping of variable names to their concrete values. Returns `None` if
+    /// any variable is not found in the bindings or if the operation cannot
+    /// be evaluated (e.g., division by zero).
+    ///
+    /// # Arguments
+    /// * `bindings` - A map from variable names to their concrete values
+    ///
+    /// # Returns
+    /// * `Some(ConstValue)` - The evaluated concrete value
+    /// * `None` - If evaluation fails (missing variable, division by zero, etc.)
+    pub fn get_concrete_value(&self, bindings: &HashMap<String, ConstValue>) -> Option<ConstValue> {
+        match self {
+            SymExpr::Variable(name) => bindings.get(name).cloned(),
+
+            SymExpr::Constant(value) => Some(value.clone()),
+
+            SymExpr::UnaryOp(op, expr) => {
+                let val = expr.get_concrete_value(bindings)?;
+                match (op, val) {
+                    (UnOp::Neg, ConstValue::I64(n)) => Some(ConstValue::I64(-n)),
+                    (UnOp::Neg, ConstValue::I32(n)) => Some(ConstValue::I32(-n)),
+                    (UnOp::Neg, ConstValue::F64(n)) => Some(ConstValue::F64(-n)),
+                    (UnOp::Neg, ConstValue::F32(n)) => Some(ConstValue::F32(-n)),
+                    (UnOp::Not, ConstValue::Bool(b)) => Some(ConstValue::Bool(!b)),
+                    (UnOp::Not, ConstValue::U64(n)) => Some(ConstValue::U64(!n)),
+                    (UnOp::Not, ConstValue::U32(n)) => Some(ConstValue::U32(!n)),
+                    (UnOp::Not, ConstValue::U8(n)) => Some(ConstValue::U8(!n)),
+                    (UnOp::Not, ConstValue::I64(n)) => Some(ConstValue::I64(!n)),
+                    (UnOp::Not, ConstValue::I32(n)) => Some(ConstValue::I32(!n)),
+                    _ => None,
+                }
+            }
+
+            SymExpr::BinaryOp(op, left, right) => {
+                let left_val = left.get_concrete_value(bindings)?;
+                let right_val = right.get_concrete_value(bindings)?;
+                eval_binary_op(*op, left_val, right_val)
+            }
+
+            SymExpr::Conditional(cond, then_expr, else_expr) => {
+                let cond_val = cond.get_concrete_value(bindings)?;
+                match cond_val {
+                    ConstValue::Bool(true) => then_expr.get_concrete_value(bindings),
+                    ConstValue::Bool(false) => else_expr.get_concrete_value(bindings),
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
+/// Evaluate a binary operation on two concrete values
+fn eval_binary_op(op: BinOp, left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match op {
+        // Arithmetic operations
+        BinOp::Add => eval_add(left, right),
+        BinOp::Sub => eval_sub(left, right),
+        BinOp::Mul => eval_mul(left, right),
+        BinOp::Div => eval_div(left, right),
+        BinOp::Mod => eval_mod(left, right),
+
+        // Bitwise operations
+        BinOp::BitAnd => eval_bitand(left, right),
+        BinOp::BitOr => eval_bitor(left, right),
+        BinOp::BitXor => eval_bitxor(left, right),
+        BinOp::Shl => eval_shl(left, right),
+        BinOp::Shr => eval_shr(left, right),
+
+        // Comparison operations
+        BinOp::Eq => eval_eq(left, right),
+        BinOp::Ne => eval_ne(left, right),
+        BinOp::Lt => eval_lt(left, right),
+        BinOp::Le => eval_le(left, right),
+        BinOp::Gt => eval_gt(left, right),
+        BinOp::Ge => eval_ge(left, right),
+    }
+}
+
+fn eval_add(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a.wrapping_add(b))),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a.wrapping_add(b))),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a.wrapping_add(b))),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a.wrapping_add(b))),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a.wrapping_add(b))),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::F64(a + b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::F32(a + b)),
+        _ => None,
+    }
+}
+
+fn eval_sub(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a.wrapping_sub(b))),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a.wrapping_sub(b))),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a.wrapping_sub(b))),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a.wrapping_sub(b))),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a.wrapping_sub(b))),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::F64(a - b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::F32(a - b)),
+        _ => None,
+    }
+}
+
+fn eval_mul(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a.wrapping_mul(b))),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a.wrapping_mul(b))),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a.wrapping_mul(b))),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a.wrapping_mul(b))),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a.wrapping_mul(b))),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::F64(a * b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::F32(a * b)),
+        _ => None,
+    }
+}
+
+fn eval_div(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) if b != 0 => Some(ConstValue::U64(a / b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) if b != 0 => Some(ConstValue::I64(a / b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) if b != 0 => Some(ConstValue::U32(a / b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) if b != 0 => Some(ConstValue::I32(a / b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) if b != 0 => Some(ConstValue::U8(a / b)),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::F64(a / b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::F32(a / b)),
+        _ => None,
+    }
+}
+
+fn eval_mod(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) if b != 0 => Some(ConstValue::U64(a % b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) if b != 0 => Some(ConstValue::I64(a % b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) if b != 0 => Some(ConstValue::U32(a % b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) if b != 0 => Some(ConstValue::I32(a % b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) if b != 0 => Some(ConstValue::U8(a % b)),
+        _ => None,
+    }
+}
+
+fn eval_bitand(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a & b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a & b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a & b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a & b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a & b)),
+        (ConstValue::Bool(a), ConstValue::Bool(b)) => Some(ConstValue::Bool(a && b)),
+        _ => None,
+    }
+}
+
+fn eval_bitor(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a | b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a | b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a | b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a | b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a | b)),
+        (ConstValue::Bool(a), ConstValue::Bool(b)) => Some(ConstValue::Bool(a || b)),
+        _ => None,
+    }
+}
+
+fn eval_bitxor(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::U64(a ^ b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::I64(a ^ b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::U32(a ^ b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::I32(a ^ b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::U8(a ^ b)),
+        (ConstValue::Bool(a), ConstValue::Bool(b)) => Some(ConstValue::Bool(a ^ b)),
+        _ => None,
+    }
+}
+
+fn eval_shl(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    // Get shift amount as u32
+    let shift = match &right {
+        ConstValue::U64(n) => *n as u32,
+        ConstValue::U32(n) => *n,
+        ConstValue::U8(n) => *n as u32,
+        ConstValue::I64(n) if *n >= 0 => *n as u32,
+        ConstValue::I32(n) if *n >= 0 => *n as u32,
+        _ => return None,
+    };
+
+    match left {
+        ConstValue::U64(a) if shift < 64 => Some(ConstValue::U64(a << shift)),
+        ConstValue::I64(a) if shift < 64 => Some(ConstValue::I64(a << shift)),
+        ConstValue::U32(a) if shift < 32 => Some(ConstValue::U32(a << shift)),
+        ConstValue::I32(a) if shift < 32 => Some(ConstValue::I32(a << shift)),
+        ConstValue::U8(a) if shift < 8 => Some(ConstValue::U8(a << shift)),
+        _ => None,
+    }
+}
+
+fn eval_shr(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    // Get shift amount as u32
+    let shift = match &right {
+        ConstValue::U64(n) => *n as u32,
+        ConstValue::U32(n) => *n,
+        ConstValue::U8(n) => *n as u32,
+        ConstValue::I64(n) if *n >= 0 => *n as u32,
+        ConstValue::I32(n) if *n >= 0 => *n as u32,
+        _ => return None,
+    };
+
+    match left {
+        ConstValue::U64(a) if shift < 64 => Some(ConstValue::U64(a >> shift)),
+        ConstValue::I64(a) if shift < 64 => Some(ConstValue::I64(a >> shift)),
+        ConstValue::U32(a) if shift < 32 => Some(ConstValue::U32(a >> shift)),
+        ConstValue::I32(a) if shift < 32 => Some(ConstValue::I32(a >> shift)),
+        ConstValue::U8(a) if shift < 8 => Some(ConstValue::U8(a >> shift)),
+        _ => None,
+    }
+}
+
+fn eval_eq(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    Some(ConstValue::Bool(const_equal_with_nan(&left, &right)))
+}
+
+fn eval_ne(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    Some(ConstValue::Bool(!const_equal_with_nan(&left, &right)))
+}
+
+fn eval_lt(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::Bool(a < b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::Bool(a < b)),
+        _ => None,
+    }
+}
+
+fn eval_le(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::Bool(a <= b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::Bool(a <= b)),
+        _ => None,
+    }
+}
+
+fn eval_gt(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::Bool(a > b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::Bool(a > b)),
+        _ => None,
+    }
+}
+
+fn eval_ge(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::U64(a), ConstValue::U64(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::I64(a), ConstValue::I64(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::U32(a), ConstValue::U32(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::I32(a), ConstValue::I32(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::U8(a), ConstValue::U8(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::F64(a), ConstValue::F64(b)) => Some(ConstValue::Bool(a >= b)),
+        (ConstValue::F32(a), ConstValue::F32(b)) => Some(ConstValue::Bool(a >= b)),
+        _ => None,
     }
 }
 
@@ -1512,6 +1901,73 @@ mod tests {
 
         // Test that comparison operations have lowest precedence
         assert!(BinOp::Lt.precedence() < BinOp::Add.precedence());
+    }
+
+    #[test]
+    fn test_const_value_conversions() {
+        // Test u64 conversions
+        let val = ConstValue::U64(42);
+        assert_eq!(val.as_u64(), Some(42));
+        assert_eq!(val.as_i64(), Some(42));
+        assert_eq!(val.as_u32(), Some(42));
+        assert_eq!(val.as_i32(), Some(42));
+        assert_eq!(val.as_u8(), Some(42));
+        assert_eq!(val.as_f64(), Some(42.0));
+        assert_eq!(val.as_f32(), Some(42.0));
+        assert_eq!(val.as_bool(), None);
+
+        // Test i64 conversions
+        let val = ConstValue::I64(-10);
+        assert_eq!(val.as_i64(), Some(-10));
+        assert_eq!(val.as_u64(), Some(-10i64 as u64)); // Cast to u64
+        assert_eq!(val.as_i32(), Some(-10));
+
+        // Test u32 conversions
+        let val = ConstValue::U32(100);
+        assert_eq!(val.as_u32(), Some(100));
+        assert_eq!(val.as_u64(), Some(100));
+        assert_eq!(val.as_i64(), Some(100));
+
+        // Test i32 conversions
+        let val = ConstValue::I32(-5);
+        assert_eq!(val.as_i32(), Some(-5));
+        assert_eq!(val.as_i64(), Some(-5));
+
+        // Test u8 conversions
+        let val = ConstValue::U8(255);
+        assert_eq!(val.as_u8(), Some(255));
+        assert_eq!(val.as_u32(), Some(255));
+        assert_eq!(val.as_u64(), Some(255));
+
+        // Test f64 conversions
+        let val = ConstValue::F64(3.14);
+        assert_eq!(val.as_f64(), Some(3.14));
+        assert_eq!(val.as_f32(), Some(3.14f32));
+        assert_eq!(val.as_u64(), Some(3));
+        assert_eq!(val.as_i64(), Some(3));
+
+        // Test f32 conversions
+        let val = ConstValue::F32(2.5);
+        assert_eq!(val.as_f32(), Some(2.5));
+        assert_eq!(val.as_f64(), Some(2.5f64));
+        assert_eq!(val.as_u32(), Some(2));
+
+        // Test bool conversions
+        let val = ConstValue::Bool(true);
+        assert_eq!(val.as_bool(), Some(true));
+        assert_eq!(val.as_u64(), None);
+        assert_eq!(val.as_i64(), None);
+        assert_eq!(val.as_f64(), None);
+
+        // Test truncation
+        let val = ConstValue::U64(300);
+        assert_eq!(val.as_u8(), Some(44)); // 300 % 256 = 44
+
+        // Test large value casting
+        let val = ConstValue::U32(u32::MAX);
+        assert_eq!(val.as_u32(), Some(u32::MAX));
+        assert_eq!(val.as_u64(), Some(u32::MAX as u64));
+        assert_eq!(val.as_u8(), Some(255)); // Truncated
     }
 }
 

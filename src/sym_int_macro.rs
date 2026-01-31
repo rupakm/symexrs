@@ -168,10 +168,28 @@ macro_rules! define_sym_int {
                     mgr.fresh_variable($type_name)
                 };
 
+                // Try to evaluate the expression with empty bindings (works for constants)
+                // and cast to the appropriate type, otherwise default to 0
+                let concrete_value = {
+                    let bindings = std::collections::HashMap::new();
+                    expr.get_concrete_value(&bindings)
+                        .and_then(|cv| match stringify!($const_variant) {
+                            "U64" => cv.as_u64().map(|v| v as $concrete_type),
+                            "I64" => cv.as_i64().map(|v| v as $concrete_type),
+                            "U32" => cv.as_u32().map(|v| v as $concrete_type),
+                            "I32" => cv.as_i32().map(|v| v as $concrete_type),
+                            "U8" => cv.as_u8().map(|v| v as $concrete_type),
+                            "F64" => cv.as_f64().map(|v| v as $concrete_type),
+                            "F32" => cv.as_f32().map(|v| v as $concrete_type),
+                            _ => None,
+                        })
+                        .or(Some(0 as $concrete_type))
+                };
+
                 Self {
                     variable_name,
                     expr,
-                    concrete_value: Some(0 as $concrete_type),
+                    concrete_value,
                     manager,
                 }
             }

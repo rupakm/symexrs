@@ -949,6 +949,84 @@ mod tests {
     }
 
     #[test]
+    fn test_symu64_from_expr_evaluates_constants() {
+        let manager = create_test_manager();
+
+        // Test with a constant expression
+        let expr = SymExpr::Constant(ConstValue::U64(100));
+        let sym = SymU64::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(100));
+
+        // Test with a constant expression that needs casting (I64 -> U64)
+        let expr = SymExpr::Constant(ConstValue::I64(50));
+        let sym = SymU64::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(50));
+
+        // Test with a constant expression (U32 -> U64)
+        let expr = SymExpr::Constant(ConstValue::U32(200));
+        let sym = SymU64::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(200));
+
+        // Test with a binary operation on constants
+        let expr = SymExpr::binary_op(
+            BinOp::Add,
+            SymExpr::Constant(ConstValue::U64(10)),
+            SymExpr::Constant(ConstValue::U64(20)),
+        );
+        let sym = SymU64::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(30));
+
+        // Test with a variable expression (can't evaluate without bindings)
+        let expr = SymExpr::Variable("x".to_string());
+        let sym = SymU64::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(0)); // Falls back to 0
+    }
+
+    #[test]
+    fn test_symu32_from_expr_evaluates_constants() {
+        let manager = create_test_manager();
+
+        // Test with a constant expression
+        let expr = SymExpr::Constant(ConstValue::U32(100));
+        let sym = SymU32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(100));
+
+        // Test with casting from U64 to U32
+        let expr = SymExpr::Constant(ConstValue::U64(200));
+        let sym = SymU32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(200));
+
+        // Test with truncation (U64 value too large for U32)
+        let expr = SymExpr::Constant(ConstValue::U64(u64::MAX));
+        let sym = SymU32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(u32::MAX)); // Truncated
+    }
+
+    #[test]
+    fn test_symi32_from_expr_evaluates_constants() {
+        let manager = create_test_manager();
+
+        // Test with a constant expression
+        let expr = SymExpr::Constant(ConstValue::I32(-50));
+        let sym = SymI32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(-50));
+
+        // Test with casting from I64 to I32
+        let expr = SymExpr::Constant(ConstValue::I64(-100));
+        let sym = SymI32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(-100));
+
+        // Test with binary operation
+        let expr = SymExpr::binary_op(
+            BinOp::Sub,
+            SymExpr::Constant(ConstValue::I32(10)),
+            SymExpr::Constant(ConstValue::I32(30)),
+        );
+        let sym = SymI32::from_expr(expr, Arc::clone(&manager));
+        assert_eq!(sym.concrete_value(), Some(-20));
+    }
+
+    #[test]
     fn test_symu64_new_global() {
         crate::reset_global_manager();
         crate::init_global().unwrap();
