@@ -45,6 +45,22 @@ pub enum SymExError {
     /// Duplicate variable registration
     DuplicateVariable(String),
 
+    // String-specific Errors
+    /// Invalid string operation
+    InvalidStringOperation(String),
+    /// String index or length out of bounds
+    StringBoundsError {
+        operation: String,
+        index: i64,
+        length: usize,
+    },
+    /// Non-ASCII character encountered
+    NonAsciiCharacter { character: char, position: usize },
+    /// Empty pattern in string operation
+    EmptyPatternError,
+    /// Z3 string theory not supported
+    StringTheoryUnsupported,
+
     // General Errors
     /// Generic error with message
     Generic(String),
@@ -100,6 +116,36 @@ impl fmt::Display for SymExError {
             }
             SymExError::DuplicateVariable(var) => {
                 write!(f, "Duplicate variable: {var}")
+            }
+
+            // String-specific Errors
+            SymExError::InvalidStringOperation(msg) => {
+                write!(f, "Invalid string operation: {msg}")
+            }
+            SymExError::StringBoundsError {
+                operation,
+                index,
+                length,
+            } => {
+                write!(
+                    f,
+                    "String bounds error in {operation}: index {index} out of bounds for length {length}"
+                )
+            }
+            SymExError::NonAsciiCharacter {
+                character,
+                position,
+            } => {
+                write!(
+                    f,
+                    "Non-ASCII character '{character}' at position {position}"
+                )
+            }
+            SymExError::EmptyPatternError => {
+                write!(f, "Empty pattern not allowed in string operation")
+            }
+            SymExError::StringTheoryUnsupported => {
+                write!(f, "Z3 string theory not supported")
             }
 
             // General Errors

@@ -567,6 +567,18 @@ pub struct TypeInfo {
     pub creation_site: Option<String>,
 }
 
+impl TypeInfo {
+    /// Create type info for a string variable
+    pub fn string(creation_site: Option<String>) -> Self {
+        TypeInfo {
+            type_name: "string".to_string(),
+            bit_width: None,
+            is_signed: false,
+            creation_site,
+        }
+    }
+}
+
 impl SymExManager {
     /// Create a new SymExManager with the given solver
     pub fn new(solver: Box<dyn SmtSolver>) -> Self {
@@ -639,6 +651,12 @@ impl SymExManager {
         }
         self.variable_registry.insert(name, type_info);
         Ok(())
+    }
+
+    /// Register a string variable
+    pub fn register_string_variable(&mut self, name: String) -> SymExResult<()> {
+        let type_info = TypeInfo::string(None);
+        self.register_variable(name, type_info)
     }
 
     /// Get metadata for a registered variable
@@ -788,6 +806,16 @@ impl SymExManager {
                     self.evaluate_constraint_concrete(else_expr, concrete_values)
                 }
             }
+
+            // String operations - can't evaluate with u64 concrete values
+            SymExpr::StrSubstring(_, _, _)
+            | SymExpr::StrContains(_, _)
+            | SymExpr::StrPrefixOf(_, _)
+            | SymExpr::StrSuffixOf(_, _)
+            | SymExpr::StrReplace(_, _, _)
+            | SymExpr::StrReplaceAll(_, _, _)
+            | SymExpr::StrAt(_, _)
+            | SymExpr::StrIndexOf(_, _, _) => None,
         }
     }
 
@@ -846,6 +874,16 @@ impl SymExManager {
                     self.evaluate_expr_to_u64(else_expr, concrete_values)
                 }
             }
+
+            // String operations - can't evaluate to u64
+            SymExpr::StrSubstring(_, _, _)
+            | SymExpr::StrContains(_, _)
+            | SymExpr::StrPrefixOf(_, _)
+            | SymExpr::StrSuffixOf(_, _)
+            | SymExpr::StrReplace(_, _, _)
+            | SymExpr::StrReplaceAll(_, _, _)
+            | SymExpr::StrAt(_, _)
+            | SymExpr::StrIndexOf(_, _, _) => None,
         }
     }
 
@@ -1358,6 +1396,12 @@ impl SymExManager {
             ));
         }
 
+        // Validate string-specific operations
+        constraint.validate_string_operations()?;
+
+        // Validate ASCII characters in string constants
+        constraint.validate_ascii()?;
+
         Ok(())
     }
 
@@ -1569,6 +1613,28 @@ mod tests {
     }
 
     #[test]
+    fn test_register_string_variable() {
+        let mut manager = create_test_manager();
+
+        // Register a string variable
+        let var_name = "test_string".to_string();
+        let result = manager.register_string_variable(var_name.clone());
+        assert!(result.is_ok());
+
+        // Check that variable is registered
+        let registered_vars = manager.get_registered_variables();
+        assert_eq!(registered_vars, vec!["test_string"]);
+
+        // Check variable info
+        let info = manager.get_variable_info("test_string");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.type_name, "string");
+        assert_eq!(info.bit_width, None);
+        assert!(!info.is_signed);
+    }
+
+    #[test]
     fn test_constraint_management() {
         let mut manager = create_test_manager();
 
@@ -1611,6 +1677,85 @@ mod tests {
         assert!(matches!(
             result.unwrap_err(),
             SymExError::UnboundVariable(_)
+        ));
+    }
+
+    #[test]
+    fn test_constraint_validation_string_negative_index() {
+        let mut manager = create_test_manager();
+
+        // Register a string variable
+        let type_info = TypeInfo::string(None);
+        manager
+            .register_variable("s".to_string(), type_info)
+            .unwrap();
+
+        // Try to add constraint with negative index
+        let s = SymExpr::Variable("s".to_string());
+        let negative_index = SymExpr::Constant(ConstValue::I64(-1));
+        let length = SymExpr::Constant(ConstValue::I64(2));
+        let substring = SymExpr::str_substring(s, negative_index, length);
+        
+        // Create a constraint using the substring
+        let expected = SymExpr::Constant(ConstValue::String("he".to_string()));
+        let constraint = SymExpr::binary_op(BinOp::Eq, substring, expected);
+
+        let result = manager.add_constraint(constraint);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SymExError::InvalidStringOperation(_)
+        ));
+    }
+
+    #[test]
+    fn test_constraint_validation_string_empty_pattern() {
+        let mut manager = create_test_manager();
+
+        // Register a string variable
+        let type_info = TypeInfo::string(None);
+        manager
+            .register_variable("s".to_string(), type_info)
+            .unwrap();
+
+        // Try to add constraint with empty pattern
+        let s = SymExpr::Variable("s".to_string());
+        let empty_pattern = SymExpr::Constant(ConstValue::String("".to_string()));
+        let replacement = SymExpr::Constant(ConstValue::String("x".to_string()));
+        let replaced = SymExpr::str_replace(s, empty_pattern, replacement);
+        
+        // Create a constraint using the replace
+        let expected = SymExpr::Constant(ConstValue::String("result".to_string()));
+        let constraint = SymExpr::binary_op(BinOp::Eq, replaced, expected);
+
+        let result = manager.add_constraint(constraint);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SymExError::EmptyPatternError
+        ));
+    }
+
+    #[test]
+    fn test_constraint_validation_string_non_ascii() {
+        let mut manager = create_test_manager();
+
+        // Register a string variable
+        let type_info = TypeInfo::string(None);
+        manager
+            .register_variable("s".to_string(), type_info)
+            .unwrap();
+
+        // Try to add constraint with non-ASCII string
+        let s = SymExpr::Variable("s".to_string());
+        let non_ascii = SymExpr::Constant(ConstValue::String("Hello, 世界!".to_string()));
+        let constraint = SymExpr::binary_op(BinOp::Eq, s, non_ascii);
+
+        let result = manager.add_constraint(constraint);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SymExError::NonAsciiCharacter { .. }
         ));
     }
 

@@ -63,6 +63,25 @@ impl Model {
         }
     }
 
+    /// Get the string value assigned to a variable
+    ///
+    /// Returns a reference to the string value if the variable is assigned
+    /// a string value in this model, or None otherwise.
+    pub fn get_string_value(&self, var_name: &str) -> Option<&str> {
+        match self.assignments.get(var_name) {
+            Some(ConstValue::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Get the string value as an owned String
+    ///
+    /// Returns an owned String if the variable is assigned a string value
+    /// in this model, or None otherwise.
+    pub fn get_string(&self, var_name: &str) -> Option<String> {
+        self.get_string_value(var_name).map(|s| s.to_string())
+    }
+
     /// Get the u64 value assigned to a variable (for concolic execution)
     pub fn get_u64(&self, var_name: &str) -> Option<u64> {
         match self.assignments.get(var_name) {
@@ -186,6 +205,8 @@ pub struct Z3Solver {
     asserted_constraints: Vec<SymExpr>,
     // Stack to save constraint states for push/pop operations
     constraint_stack: Vec<Vec<SymExpr>>,
+    // Track the last constraints passed to check_sat for get_model
+    last_checked_constraints: Vec<SymExpr>,
 }
 
 impl Z3Solver {
@@ -225,7 +246,58 @@ impl Z3Solver {
             assertion_level: 0,
             asserted_constraints: Vec::new(),
             constraint_stack: Vec::new(),
+            last_checked_constraints: Vec::new(),
         })
+    }
+
+    /// Check if Z3 string theory is available
+    ///
+    /// This method verifies that Z3 can handle string operations by attempting
+    /// to create a simple string constraint. String theory support is required
+    /// for symbolic string operations.
+    pub fn check_string_theory_support(&self) -> SymExResult<()> {
+        // Try to create a simple string constraint to verify string theory support
+        let test_solver = Solver::new(&self.context);
+        
+        // Attempt to create a string variable and a simple constraint
+        let test_str = z3::ast::String::new_const(&self.context, "test_string");
+        let empty_str = z3::ast::String::from_str(&self.context, "").unwrap();
+        let test_constraint = test_str._eq(&empty_str);
+        
+        // Try to assert the constraint
+        test_solver.assert(&test_constraint);
+        
+        // Check if the solver can handle it
+        match test_solver.check() {
+            Z3SatResult::Sat | Z3SatResult::Unsat => {
+                // String theory is supported
+                Ok(())
+            }
+            Z3SatResult::Unknown => {
+                Err(SymExError::SolverError(
+                    "Z3 string theory is not available or not properly configured".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Set the solver logic to support string operations
+    ///
+    /// This method configures the solver to use QF_S (quantifier-free strings)
+    /// or QF_SLIA (quantifier-free strings with linear integer arithmetic) logic,
+    /// which is required for string constraint solving.
+    ///
+    /// Note: The Z3 Rust bindings don't expose set_logic directly, so we rely on
+    /// Z3's automatic logic detection. This method serves as a documentation point
+    /// and validation check.
+    pub fn set_string_logic(&self) -> SymExResult<()> {
+        // Z3's Rust bindings automatically detect the required logic based on
+        // the constraints asserted. We verify that string theory is available.
+        self.check_string_theory_support()?;
+        
+        // If we reach here, string theory is supported
+        // Z3 will automatically use QF_S or QF_SLIA as needed
+        Ok(())
     }
 
     /// Get a new solver instance for this context
@@ -319,6 +391,28 @@ impl Z3Solver {
                 SymExpr::Conditional(cond, then_expr, else_expr) => {
                     has_content(cond) || has_content(then_expr) || has_content(else_expr)
                 }
+                SymExpr::StrSubstring(string, start, length) => {
+                    has_content(string) || has_content(start) || has_content(length)
+                }
+                SymExpr::StrContains(haystack, needle) => {
+                    has_content(haystack) || has_content(needle)
+                }
+                SymExpr::StrPrefixOf(prefix, string) => {
+                    has_content(prefix) || has_content(string)
+                }
+                SymExpr::StrSuffixOf(suffix, string) => {
+                    has_content(suffix) || has_content(string)
+                }
+                SymExpr::StrReplace(string, pattern, replacement) => {
+                    has_content(string) || has_content(pattern) || has_content(replacement)
+                }
+                SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                    has_content(string) || has_content(pattern) || has_content(replacement)
+                }
+                SymExpr::StrAt(string, index) => has_content(string) || has_content(index),
+                SymExpr::StrIndexOf(haystack, needle, offset) => {
+                    has_content(haystack) || has_content(needle) || has_content(offset)
+                }
             }
         }
 
@@ -383,6 +477,172 @@ impl Z3Solver {
         None
     }
 
+    /// Extract a string value from a Z3 model
+    ///
+    /// This method attempts to extract the string value assigned to a variable
+    /// in the given Z3 model. Returns None if the variable is not found or
+    /// cannot be evaluated as a string.
+    fn extract_string_from_model(
+        &self,
+        z3_model: &z3::Model,
+        var_name: &str,
+    ) -> Option<String> {
+        // Create a Z3 string constant for the variable
+        let string_var = z3::ast::String::new_const(&self.context, var_name);
+        
+        // Try to evaluate the variable in the model
+        if let Some(value_ast) = z3_model.eval(&string_var, true) {
+            // Try to convert the Z3 AST to a string
+            // The z3 crate provides as_string() method for String AST nodes
+            if let Some(string_val) = value_ast.as_string() {
+                return Some(string_val.to_string());
+            }
+        }
+        
+        None
+    }
+
+    /// Infer variable types from constraints
+    ///
+    /// This method analyzes constraints to determine the likely type of each variable
+    /// based on how it's used in the constraints.
+    fn infer_variable_types<'a>(&self, expr: &'a SymExpr, types: &mut HashMap<String, &'a str>) {
+        match expr {
+            SymExpr::Variable(_) => {
+                // Variables alone don't tell us the type
+            }
+            SymExpr::Constant(val) => {
+                // Constants don't have variable names
+                match val {
+                    ConstValue::String(_) => {}
+                    ConstValue::Bool(_) => {}
+                    _ => {}
+                }
+            }
+            SymExpr::BinaryOp(op, left, right) => {
+                // Infer types based on the operation
+                match op {
+                    BinOp::StrConcat | BinOp::StrLexLt | BinOp::StrLexLe => {
+                        // String operations - mark variables as strings
+                        if let SymExpr::Variable(name) = left.as_ref() {
+                            types.insert(name.clone(), "string");
+                        }
+                        if let SymExpr::Variable(name) = right.as_ref() {
+                            types.insert(name.clone(), "string");
+                        }
+                    }
+                    BinOp::Eq | BinOp::Ne => {
+                        // Equality - infer type from the other operand
+                        match (left.as_ref(), right.as_ref()) {
+                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::String(_))) |
+                            (SymExpr::Constant(ConstValue::String(_)), SymExpr::Variable(name)) => {
+                                types.insert(name.clone(), "string");
+                            }
+                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::Bool(_))) |
+                            (SymExpr::Constant(ConstValue::Bool(_)), SymExpr::Variable(name)) => {
+                                types.insert(name.clone(), "bool");
+                            }
+                            _ => {}
+                        }
+                    }
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                        // Boolean operations
+                        if let SymExpr::Variable(name) = left.as_ref() {
+                            types.insert(name.clone(), "bool");
+                        }
+                        if let SymExpr::Variable(name) = right.as_ref() {
+                            types.insert(name.clone(), "bool");
+                        }
+                    }
+                    _ => {
+                        // Other operations - assume integer
+                    }
+                }
+                
+                // Recursively infer types from sub-expressions
+                self.infer_variable_types(left, types);
+                self.infer_variable_types(right, types);
+            }
+            SymExpr::UnaryOp(op, operand) => {
+                match op {
+                    UnOp::Not => {
+                        // Boolean operation
+                        if let SymExpr::Variable(name) = operand.as_ref() {
+                            types.insert(name.clone(), "bool");
+                        }
+                    }
+                    UnOp::StrLen => {
+                        // String length - operand is a string
+                        if let SymExpr::Variable(name) = operand.as_ref() {
+                            types.insert(name.clone(), "string");
+                        }
+                    }
+                    _ => {}
+                }
+                
+                self.infer_variable_types(operand, types);
+            }
+            SymExpr::Conditional(cond, then_expr, else_expr) => {
+                self.infer_variable_types(cond, types);
+                self.infer_variable_types(then_expr, types);
+                self.infer_variable_types(else_expr, types);
+            }
+            SymExpr::StrSubstring(string, start, length) => {
+                if let SymExpr::Variable(name) = string.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                self.infer_variable_types(string, types);
+                self.infer_variable_types(start, types);
+                self.infer_variable_types(length, types);
+            }
+            SymExpr::StrContains(haystack, needle) |
+            SymExpr::StrPrefixOf(haystack, needle) |
+            SymExpr::StrSuffixOf(haystack, needle) => {
+                if let SymExpr::Variable(name) = haystack.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                if let SymExpr::Variable(name) = needle.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                self.infer_variable_types(haystack, types);
+                self.infer_variable_types(needle, types);
+            }
+            SymExpr::StrReplace(string, pattern, replacement) |
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                if let SymExpr::Variable(name) = string.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                if let SymExpr::Variable(name) = pattern.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                if let SymExpr::Variable(name) = replacement.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                self.infer_variable_types(string, types);
+                self.infer_variable_types(pattern, types);
+                self.infer_variable_types(replacement, types);
+            }
+            SymExpr::StrAt(string, index) => {
+                if let SymExpr::Variable(name) = string.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                self.infer_variable_types(string, types);
+                self.infer_variable_types(index, types);
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                if let SymExpr::Variable(name) = haystack.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                if let SymExpr::Variable(name) = needle.as_ref() {
+                    types.insert(name.clone(), "string");
+                }
+                self.infer_variable_types(haystack, types);
+                self.infer_variable_types(needle, types);
+                self.infer_variable_types(offset, types);
+            }
+        }
+    }
+
     /// Get a model for a specific set of constraints
     pub fn get_model_for_constraints(
         &mut self,
@@ -396,13 +656,11 @@ impl Z3Solver {
 
                 // Collect all variables from constraints
                 let all_variables = self.get_constraint_variables(constraints);
-                let mut variable_asts = HashMap::new();
-
-                // Create Z3 AST nodes for all variables so we can evaluate them later
-                for var_name in &all_variables {
-                    // Assume integer variables for now (this can be enhanced with type information)
-                    let var_ast = Int::new_const(&self.context, var_name.as_str());
-                    variable_asts.insert(var_name.clone(), var_ast);
+                
+                // Infer variable types from constraints
+                let mut variable_types: HashMap<String, &str> = HashMap::new();
+                for constraint in constraints {
+                    self.infer_variable_types(constraint, &mut variable_types);
                 }
 
                 // Assert all constraints
@@ -418,27 +676,63 @@ impl Z3Solver {
                             Some(z3_model) => {
                                 let mut assignments = HashMap::new();
 
-                                // Evaluate each variable in the model
-                                for (var_name, var_ast) in variable_asts {
-                                    if let Some(value_ast) = z3_model.eval(&var_ast, true) {
-                                        if let Some(int_val) = value_ast.as_i64() {
-                                            assignments.insert(var_name, ConstValue::I64(int_val));
+                                // Try to extract each variable using inferred type information
+                                for var_name in &all_variables {
+                                    let inferred_type = variable_types.get(var_name.as_str()).copied();
+                                    
+                                    match inferred_type {
+                                        Some("string") => {
+                                            // Try as string
+                                            if let Some(string_val) = self.extract_string_from_model(&z3_model, var_name) {
+                                                assignments.insert(var_name.clone(), ConstValue::String(string_val));
+                                                continue;
+                                            }
+                                        }
+                                        Some("bool") => {
+                                            // Try as boolean
+                                            let bool_var = Bool::new_const(&self.context, var_name.as_str());
+                                            if let Some(value_ast) = z3_model.eval(&bool_var, true) {
+                                                if let Some(bool_val) = value_ast.as_bool() {
+                                                    assignments.insert(var_name.clone(), ConstValue::Bool(bool_val));
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            // Default to integer
+                                            let int_var = Int::new_const(&self.context, var_name.as_str());
+                                            if let Some(value_ast) = z3_model.eval(&int_var, true) {
+                                                if let Some(int_val) = value_ast.as_i64() {
+                                                    assignments.insert(var_name.clone(), ConstValue::I64(int_val));
+                                                    continue;
+                                                }
+                                            }
                                         }
                                     }
-                                }
-
-                                // Also try boolean variables
-                                for var_name in &all_variables {
+                                    
+                                    // Fallback: try all types if inferred type didn't work
                                     if !assignments.contains_key(var_name) {
-                                        let bool_var =
-                                            Bool::new_const(&self.context, var_name.as_str());
+                                        // Try as integer
+                                        let int_var = Int::new_const(&self.context, var_name.as_str());
+                                        if let Some(value_ast) = z3_model.eval(&int_var, true) {
+                                            if let Some(int_val) = value_ast.as_i64() {
+                                                assignments.insert(var_name.clone(), ConstValue::I64(int_val));
+                                                continue;
+                                            }
+                                        }
+
+                                        // Try as boolean
+                                        let bool_var = Bool::new_const(&self.context, var_name.as_str());
                                         if let Some(value_ast) = z3_model.eval(&bool_var, true) {
                                             if let Some(bool_val) = value_ast.as_bool() {
-                                                assignments.insert(
-                                                    var_name.clone(),
-                                                    ConstValue::Bool(bool_val),
-                                                );
+                                                assignments.insert(var_name.clone(), ConstValue::Bool(bool_val));
+                                                continue;
                                             }
+                                        }
+
+                                        // Try as string
+                                        if let Some(string_val) = self.extract_string_from_model(&z3_model, var_name) {
+                                            assignments.insert(var_name.clone(), ConstValue::String(string_val));
                                         }
                                     }
                                 }
@@ -529,6 +823,10 @@ impl Z3Solver {
                         expected: "integer".to_string(),
                         found: "boolean".to_string(),
                     }),
+                    ConstValue::String(_) => Err(SymExError::TypeMismatch {
+                        expected: "integer".to_string(),
+                        found: "string".to_string(),
+                    }),
                 }
             }
 
@@ -571,10 +869,20 @@ impl Z3Solver {
             }
 
             SymExpr::UnaryOp(op, operand) => {
-                let operand_int = self.symexpr_to_z3_int(operand)?;
-
                 match op {
-                    UnOp::Neg => Ok(-&operand_int),
+                    UnOp::Neg => {
+                        let operand_int = self.symexpr_to_z3_int(operand)?;
+                        Ok(-&operand_int)
+                    }
+                    UnOp::StrLen => {
+                        // String length operation
+                        // This operation is not directly exposed in the z3 Rust bindings
+                        let _string_ast = self.symexpr_to_z3_string(operand)?;
+                        
+                        Err(SymExError::SolverError(
+                            "String length operation not yet fully implemented in Z3 Rust bindings".to_string()
+                        ))
+                    }
                     _ => Err(SymExError::SolverError(format!(
                         "Unsupported unary integer operation: {op:?}"
                     ))),
@@ -587,6 +895,126 @@ impl Z3Solver {
                 let else_int = self.symexpr_to_z3_int(else_expr)?;
                 Ok(cond_bool.ite(&then_int, &else_int))
             }
+
+            // String operations that return integers (StrIndexOf)
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                // String index_of operation
+                let _haystack_str = self.symexpr_to_z3_string(haystack)?;
+                let _needle_str = self.symexpr_to_z3_string(needle)?;
+                let _offset_int = self.symexpr_to_z3_int(offset)?;
+                
+                Err(SymExError::SolverError(
+                    "String index_of operation not yet fully implemented in Z3 Rust bindings".to_string()
+                ))
+            }
+
+            // String operations that don't return integers
+            SymExpr::StrSubstring(_, _, _)
+            | SymExpr::StrContains(_, _)
+            | SymExpr::StrPrefixOf(_, _)
+            | SymExpr::StrSuffixOf(_, _)
+            | SymExpr::StrReplace(_, _, _)
+            | SymExpr::StrReplaceAll(_, _, _)
+            | SymExpr::StrAt(_, _) => Err(SymExError::TypeMismatch {
+                expected: "integer".to_string(),
+                found: "string".to_string(),
+            }),
+        }
+    }
+
+    /// Convert a SymExpr to a Z3 string AST node
+    ///
+    /// This method converts symbolic string expressions to Z3's string theory
+    /// representation, enabling constraint solving over string operations.
+    fn symexpr_to_z3_string(&self, expr: &SymExpr) -> SymExResult<z3::ast::String> {
+        match expr {
+            SymExpr::Variable(name) => {
+                if name.is_empty() {
+                    return Err(SymExError::MalformedExpression(
+                        "Variable name cannot be empty".to_string(),
+                    ));
+                }
+
+                // Check for valid variable name
+                if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    return Err(SymExError::MalformedExpression(format!(
+                        "Invalid variable name '{name}': must contain only alphanumeric characters and underscores"
+                    )));
+                }
+
+                Ok(z3::ast::String::new_const(&self.context, name.as_str()))
+            }
+
+            SymExpr::Constant(ConstValue::String(s)) => {
+                // Convert Rust string to Z3 string literal
+                z3::ast::String::from_str(&self.context, s.as_str())
+                    .map_err(|e| {
+                        SymExError::SolverError(format!(
+                            "Failed to create Z3 string literal from '{s}': {e}"
+                        ))
+                    })
+            }
+
+            SymExpr::BinaryOp(BinOp::StrConcat, left, right) => {
+                // String concatenation using Z3's seq.concat
+                let left_str = self.symexpr_to_z3_string(left)?;
+                let right_str = self.symexpr_to_z3_string(right)?;
+                
+                // Use the concat static method from z3 crate
+                Ok(z3::ast::String::concat(&self.context, &[&left_str, &right_str]))
+            }
+
+            SymExpr::StrSubstring(string, start, length) => {
+                // String substring using Z3's seq.extract
+                // This operation is not directly exposed in the z3 Rust bindings
+                // We need to use the FFI, but z3_ctx is private
+                // For now, return an error indicating this is not yet implemented
+                let _str_ast = self.symexpr_to_z3_string(string)?;
+                let _start_ast = self.symexpr_to_z3_int(start)?;
+                let _length_ast = self.symexpr_to_z3_int(length)?;
+                
+                Err(SymExError::SolverError(
+                    "String substring operation not yet fully implemented in Z3 Rust bindings".to_string()
+                ))
+            }
+
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                // String replace using Z3's seq.replace
+                // This operation is not directly exposed in the z3 Rust bindings
+                let _str_ast = self.symexpr_to_z3_string(string)?;
+                let _pattern_ast = self.symexpr_to_z3_string(pattern)?;
+                let _replacement_ast = self.symexpr_to_z3_string(replacement)?;
+                
+                Err(SymExError::SolverError(
+                    "String replace operation not yet fully implemented in Z3 Rust bindings".to_string()
+                ))
+            }
+
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                // String replace all
+                let _str_ast = self.symexpr_to_z3_string(string)?;
+                let _pattern_ast = self.symexpr_to_z3_string(pattern)?;
+                let _replacement_ast = self.symexpr_to_z3_string(replacement)?;
+                
+                Err(SymExError::SolverError(
+                    "String replace_all operation not yet fully implemented in Z3 Rust bindings".to_string()
+                ))
+            }
+
+            SymExpr::StrAt(string, index) => {
+                // Character at index using Z3's seq.at
+                let _str_ast = self.symexpr_to_z3_string(string)?;
+                let _index_ast = self.symexpr_to_z3_int(index)?;
+                
+                Err(SymExError::SolverError(
+                    "String char_at operation not yet fully implemented in Z3 Rust bindings".to_string()
+                ))
+            }
+
+            _ => Err(SymExError::TypeMismatch {
+                expected: "string".to_string(),
+                found: format!("{:?}", expr),
+            }),
         }
     }
 
@@ -604,7 +1032,7 @@ impl Z3Solver {
                 match op {
                     // Comparison operations that return boolean
                     BinOp::Eq => {
-                        // Try integer comparison first, then boolean
+                        // Try integer comparison first, then boolean, then string
                         if let (Ok(left_int), Ok(right_int)) =
                             (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right))
                         {
@@ -614,6 +1042,11 @@ impl Z3Solver {
                             self.symexpr_to_z3_bool(right),
                         ) {
                             Ok(left_bool._eq(&right_bool))
+                        } else if let (Ok(left_str), Ok(right_str)) = (
+                            self.symexpr_to_z3_string(left),
+                            self.symexpr_to_z3_string(right),
+                        ) {
+                            Ok(left_str._eq(&right_str))
                         } else {
                             Err(SymExError::SolverError(
                                 "Type mismatch in equality comparison".to_string(),
@@ -621,6 +1054,7 @@ impl Z3Solver {
                         }
                     }
                     BinOp::Ne => {
+                        // Try integer comparison first, then boolean, then string
                         if let (Ok(left_int), Ok(right_int)) =
                             (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right))
                         {
@@ -630,6 +1064,11 @@ impl Z3Solver {
                             self.symexpr_to_z3_bool(right),
                         ) {
                             Ok(left_bool._eq(&right_bool).not())
+                        } else if let (Ok(left_str), Ok(right_str)) = (
+                            self.symexpr_to_z3_string(left),
+                            self.symexpr_to_z3_string(right),
+                        ) {
+                            Ok(left_str._eq(&right_str).not())
                         } else {
                             Err(SymExError::SolverError(
                                 "Type mismatch in inequality comparison".to_string(),
@@ -637,24 +1076,108 @@ impl Z3Solver {
                         }
                     }
                     BinOp::Lt => {
-                        let left_int = self.symexpr_to_z3_int(left)?;
-                        let right_int = self.symexpr_to_z3_int(right)?;
-                        Ok(left_int.lt(&right_int))
+                        // Try integer comparison first, then string lexicographic comparison
+                        match (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right)) {
+                            (Ok(left_int), Ok(right_int)) => Ok(left_int.lt(&right_int)),
+                            (Err(e), _) | (_, Err(e)) => {
+                                // If integer conversion failed with a validation error, propagate it
+                                if matches!(e, SymExError::MalformedExpression(_)) {
+                                    return Err(e);
+                                }
+                                // Otherwise, try string comparison
+                                if let (Ok(_left_str), Ok(_right_str)) = (
+                                    self.symexpr_to_z3_string(left),
+                                    self.symexpr_to_z3_string(right),
+                                ) {
+                                    // Z3 string lexicographic comparison not yet fully implemented
+                                    Err(SymExError::SolverError(
+                                        "String lexicographic comparison not yet fully implemented in Z3 Rust bindings".to_string(),
+                                    ))
+                                } else {
+                                    Err(SymExError::SolverError(
+                                        "Type mismatch in less-than comparison".to_string(),
+                                    ))
+                                }
+                            }
+                        }
                     }
                     BinOp::Le => {
-                        let left_int = self.symexpr_to_z3_int(left)?;
-                        let right_int = self.symexpr_to_z3_int(right)?;
-                        Ok(left_int.le(&right_int))
+                        // Try integer comparison first, then string lexicographic comparison
+                        match (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right)) {
+                            (Ok(left_int), Ok(right_int)) => Ok(left_int.le(&right_int)),
+                            (Err(e), _) | (_, Err(e)) => {
+                                // If integer conversion failed with a validation error, propagate it
+                                if matches!(e, SymExError::MalformedExpression(_)) {
+                                    return Err(e);
+                                }
+                                // Otherwise, try string comparison
+                                if let (Ok(_left_str), Ok(_right_str)) = (
+                                    self.symexpr_to_z3_string(left),
+                                    self.symexpr_to_z3_string(right),
+                                ) {
+                                    // Z3 string lexicographic comparison not yet fully implemented
+                                    Err(SymExError::SolverError(
+                                        "String lexicographic comparison not yet fully implemented in Z3 Rust bindings".to_string(),
+                                    ))
+                                } else {
+                                    Err(SymExError::SolverError(
+                                        "Type mismatch in less-than-or-equal comparison".to_string(),
+                                    ))
+                                }
+                            }
+                        }
                     }
                     BinOp::Gt => {
-                        let left_int = self.symexpr_to_z3_int(left)?;
-                        let right_int = self.symexpr_to_z3_int(right)?;
-                        Ok(left_int.gt(&right_int))
+                        // Try integer comparison first, then string lexicographic comparison
+                        match (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right)) {
+                            (Ok(left_int), Ok(right_int)) => Ok(left_int.gt(&right_int)),
+                            (Err(e), _) | (_, Err(e)) => {
+                                // If integer conversion failed with a validation error, propagate it
+                                if matches!(e, SymExError::MalformedExpression(_)) {
+                                    return Err(e);
+                                }
+                                // Otherwise, try string comparison
+                                if let (Ok(_left_str), Ok(_right_str)) = (
+                                    self.symexpr_to_z3_string(left),
+                                    self.symexpr_to_z3_string(right),
+                                ) {
+                                    // Z3 string lexicographic comparison not yet fully implemented
+                                    Err(SymExError::SolverError(
+                                        "String lexicographic comparison not yet fully implemented in Z3 Rust bindings".to_string(),
+                                    ))
+                                } else {
+                                    Err(SymExError::SolverError(
+                                        "Type mismatch in greater-than comparison".to_string(),
+                                    ))
+                                }
+                            }
+                        }
                     }
                     BinOp::Ge => {
-                        let left_int = self.symexpr_to_z3_int(left)?;
-                        let right_int = self.symexpr_to_z3_int(right)?;
-                        Ok(left_int.ge(&right_int))
+                        // Try integer comparison first, then string lexicographic comparison
+                        match (self.symexpr_to_z3_int(left), self.symexpr_to_z3_int(right)) {
+                            (Ok(left_int), Ok(right_int)) => Ok(left_int.ge(&right_int)),
+                            (Err(e), _) | (_, Err(e)) => {
+                                // If integer conversion failed with a validation error, propagate it
+                                if matches!(e, SymExError::MalformedExpression(_)) {
+                                    return Err(e);
+                                }
+                                // Otherwise, try string comparison
+                                if let (Ok(_left_str), Ok(_right_str)) = (
+                                    self.symexpr_to_z3_string(left),
+                                    self.symexpr_to_z3_string(right),
+                                ) {
+                                    // Z3 string lexicographic comparison not yet fully implemented
+                                    Err(SymExError::SolverError(
+                                        "String lexicographic comparison not yet fully implemented in Z3 Rust bindings".to_string(),
+                                    ))
+                                } else {
+                                    Err(SymExError::SolverError(
+                                        "Type mismatch in greater-than-or-equal comparison".to_string(),
+                                    ))
+                                }
+                            }
+                        }
                     }
 
                     // Logical operations on booleans
@@ -695,6 +1218,31 @@ impl Z3Solver {
                 Ok(cond_bool.ite(&then_bool, &else_bool))
             }
 
+            // String operations that return boolean
+            SymExpr::StrContains(haystack, needle) => {
+                let haystack_str = self.symexpr_to_z3_string(haystack)?;
+                let needle_str = self.symexpr_to_z3_string(needle)?;
+                
+                // Use the contains method from z3 crate
+                Ok(haystack_str.contains(&needle_str))
+            }
+
+            SymExpr::StrPrefixOf(prefix, string) => {
+                let prefix_str = self.symexpr_to_z3_string(prefix)?;
+                let string_str = self.symexpr_to_z3_string(string)?;
+                
+                // Use the prefix method from z3 crate
+                Ok(prefix_str.prefix(&string_str))
+            }
+
+            SymExpr::StrSuffixOf(suffix, string) => {
+                let suffix_str = self.symexpr_to_z3_string(suffix)?;
+                let string_str = self.symexpr_to_z3_string(string)?;
+                
+                // Use the suffix method from z3 crate
+                Ok(suffix_str.suffix(&string_str))
+            }
+
             _ => Err(SymExError::SolverError(
                 "Unsupported expression type for boolean conversion".to_string(),
             )),
@@ -704,6 +1252,9 @@ impl Z3Solver {
 
 impl SmtSolver for Z3Solver {
     fn check_sat(&mut self, constraints: &[SymExpr]) -> SymExResult<SatResult> {
+        // Store the constraints for later use by get_model
+        self.last_checked_constraints = constraints.to_vec();
+        
         // Validate all constraints first
         for (i, constraint) in constraints.iter().enumerate() {
             if let Err(e) = self.validate_constraint(constraint) {
@@ -747,8 +1298,12 @@ impl SmtSolver for Z3Solver {
     }
 
     fn get_model(&mut self) -> SymExResult<Option<Model>> {
-        // Use the asserted constraints to get a model
-        self.get_model_for_constraints(&self.asserted_constraints.clone())
+        // Use the last checked constraints to get a model
+        // This combines both asserted constraints and the constraints from the last check_sat call
+        let mut all_constraints = self.asserted_constraints.clone();
+        all_constraints.extend(self.last_checked_constraints.clone());
+        
+        self.get_model_for_constraints(&all_constraints)
     }
 
     fn push(&mut self) -> SymExResult<()> {
@@ -814,6 +1369,7 @@ impl SmtSolver for Z3Solver {
         self.assertion_level = 0;
         self.asserted_constraints.clear();
         self.constraint_stack.clear();
+        self.last_checked_constraints.clear();
 
         Ok(())
     }

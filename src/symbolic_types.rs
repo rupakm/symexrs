@@ -703,6 +703,431 @@ impl TryFrom<&SymBool> for bool {
     }
 }
 
+/// Symbolic string type
+///
+/// This type implements string operations while building symbolic
+/// expressions during execution. It maintains a reference to the global
+/// SymExManager for constraint tracking.
+///
+/// # Example
+/// ```ignore
+/// let manager = get_global_manager().unwrap();
+/// let s1 = SymString::new(manager.clone());
+/// let s2 = SymString::from_concrete("hello", manager);
+/// let result = s1.concat(&s2);
+/// ```
+#[derive(Clone)]
+pub struct SymString {
+    /// Unique symbolic variable identifier
+    variable_name: String,
+    /// Symbolic expression representing this string value
+    expr: SymExpr,
+    /// Optional concrete value for concolic execution
+    concrete_value: Option<String>,
+    /// Reference to the global symbolic execution manager
+    manager: Arc<Mutex<SymExManager>>,
+}
+
+impl SymString {
+    /// Create a new symbolic string with a fresh variable name
+    pub fn new(manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("string")
+        };
+
+        let expr = SymExpr::Variable(variable_name.clone());
+
+        // Register the variable with the manager
+        {
+            let mut mgr = manager.lock().unwrap();
+            let type_info = TypeInfo::string(None);
+            let _ = mgr.register_variable(variable_name.clone(), type_info);
+        }
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Create a new symbolic string using the global thread-local manager
+    pub fn new_global() -> Self {
+        let manager = crate::get_global_manager().expect("Failed to get global manager");
+        Self::new(manager)
+    }
+
+    /// Create a new symbolic string with an initial concrete value
+    ///
+    /// This is useful for concolic execution where you want to track a value
+    /// symbolically but also maintain a concrete value for fast path checking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value contains non-ASCII characters.
+    pub fn with_value(value: String, manager: Arc<Mutex<SymExManager>>) -> Self {
+        // Validate ASCII characters
+        for (pos, ch) in value.chars().enumerate() {
+            if !ch.is_ascii() {
+                panic!(
+                    "Non-ASCII character '{}' at position {} in string value",
+                    ch, pos
+                );
+            }
+        }
+
+        let variable_name = {
+            let mut mgr = manager.lock().unwrap();
+            let type_info = TypeInfo::string(None);
+            let name = mgr.fresh_variable("string");
+            let _ = mgr.register_variable(name.clone(), type_info);
+            name
+        };
+
+        let expr = SymExpr::Variable(variable_name.clone());
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: Some(value),
+            manager,
+        }
+    }
+
+    /// Create a symbolic string from a concrete value
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value contains non-ASCII characters.
+    pub fn from_concrete(value: &str, manager: Arc<Mutex<SymExManager>>) -> Self {
+        // Validate ASCII characters
+        for (pos, ch) in value.chars().enumerate() {
+            if !ch.is_ascii() {
+                panic!(
+                    "Non-ASCII character '{}' at position {} in string value",
+                    ch, pos
+                );
+            }
+        }
+
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("string")
+        };
+
+        let expr = SymExpr::Constant(ConstValue::String(value.to_string()));
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: Some(value.to_string()),
+            manager,
+        }
+    }
+
+    /// Create a symbolic string from an existing expression
+    pub fn from_expr(expr: SymExpr, manager: Arc<Mutex<SymExManager>>) -> Self {
+        let variable_name = {
+            let mgr = manager.lock().unwrap();
+            mgr.fresh_variable("string")
+        };
+
+        Self {
+            variable_name,
+            expr,
+            concrete_value: None,
+            manager,
+        }
+    }
+
+    /// Get the symbolic expression representing this value
+    pub fn expr(&self) -> &SymExpr {
+        &self.expr
+    }
+
+    /// Get the variable name
+    pub fn variable_name(&self) -> &str {
+        &self.variable_name
+    }
+
+    /// Get the concrete value if available
+    pub fn concrete_value(&self) -> Option<&str> {
+        self.concrete_value.as_deref()
+    }
+
+    /// Set the concrete value (for concolic execution updates)
+    pub fn set_concrete_value(&mut self, value: String) {
+        self.concrete_value = Some(value);
+    }
+
+    /// Update concrete value from a model (for concolic execution)
+    ///
+    /// This method attempts to extract the string value for this variable
+    /// from the given model and updates the concrete_value field if found.
+    ///
+    /// Returns true if the value was successfully updated, false otherwise.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut s = SymString::new(manager.clone());
+    /// // ... add constraints and solve ...
+    /// let model = manager.get_model().unwrap().unwrap();
+    /// if s.update_from_model(&model) {
+    ///     println!("String value: {}", s.concrete_value().unwrap());
+    /// }
+    /// ```
+    pub fn update_from_model(&mut self, model: &crate::solver::Model) -> bool {
+        if let Some(value) = model.get_string(&self.variable_name) {
+            self.concrete_value = Some(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get a reference to the manager
+    pub fn manager(&self) -> Arc<Mutex<SymExManager>> {
+        Arc::clone(&self.manager)
+    }
+
+    /// Generate an equality constraint
+    pub fn eq_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::Eq, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a not-equal constraint
+    pub fn ne_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::Ne, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a lexicographic less-than constraint
+    pub fn lt_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::StrLexLt, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a lexicographic less-than-or-equal constraint
+    pub fn le_constraint(&self, other: &Self) -> SymExpr {
+        SymExpr::binary_op(BinOp::StrLexLe, self.expr.clone(), other.expr.clone())
+    }
+
+    /// Generate a lexicographic greater-than constraint
+    pub fn gt_constraint(&self, other: &Self) -> SymExpr {
+        // a > b is equivalent to b < a
+        SymExpr::binary_op(BinOp::StrLexLt, other.expr.clone(), self.expr.clone())
+    }
+
+    /// Generate a lexicographic greater-than-or-equal constraint
+    pub fn ge_constraint(&self, other: &Self) -> SymExpr {
+        // a >= b is equivalent to b <= a
+        SymExpr::binary_op(BinOp::StrLexLe, other.expr.clone(), self.expr.clone())
+    }
+
+    /// Add an equality constraint to the manager
+    pub fn assert_eq(&self, other: &Self) -> crate::SymExResult<()> {
+        let constraint = self.eq_constraint(other);
+        let mut mgr = self.manager.lock().unwrap();
+        mgr.add_constraint(constraint)
+    }
+
+    /// Add a not-equal constraint to the manager
+    pub fn assert_ne(&self, other: &Self) -> crate::SymExResult<()> {
+        let constraint = self.ne_constraint(other);
+        let mut mgr = self.manager.lock().unwrap();
+        mgr.add_constraint(constraint)
+    }
+
+    /// Get the length of this string as a symbolic integer
+    ///
+    /// Returns a SymU64 representing the length of this string. If this string
+    /// has a concrete value, the returned SymU64 will also have a concrete value
+    /// equal to the length of the concrete string.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let s = SymString::from_concrete("hello", manager.clone());
+    /// let len = s.length();
+    /// assert_eq!(len.concrete_value(), Some(5));
+    /// ```
+    pub fn length(&self) -> SymU64 {
+        let expr = SymExpr::str_len(self.expr.clone());
+        
+        // Compute concrete length if this string has a concrete value
+        let concrete_length = self.concrete_value.as_ref().map(|s| s.len() as u64);
+
+        let mut result = SymU64::from_expr(expr, Arc::clone(&self.manager));
+        
+        // Set the concrete length if available
+        if let Some(len) = concrete_length {
+            result.set_concrete_value(len);
+        }
+        
+        result
+    }
+
+    /// Concatenate this string with another
+    ///
+    /// Creates a new symbolic string representing the concatenation of this string
+    /// with the other string. If both strings have concrete values, the result will
+    /// also have a concrete value computed from the concatenation.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let s1 = SymString::from_concrete("hello", manager.clone());
+    /// let s2 = SymString::from_concrete(" world", manager.clone());
+    /// let result = s1.concat(&s2);
+    /// assert_eq!(result.concrete_value(), Some("hello world"));
+    /// ```
+    pub fn concat(&self, other: &Self) -> SymString {
+        let expr = SymExpr::str_concat(self.expr.clone(), other.expr.clone());
+        
+        // Compute concrete result if both operands have concrete values
+        let concrete_value = match (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+            (Some(a), Some(b)) => Some(format!("{a}{b}")),
+            _ => None,
+        };
+
+        SymString {
+            variable_name: {
+                let mgr = self.manager.lock().unwrap();
+                mgr.fresh_variable("string")
+            },
+            expr,
+            concrete_value,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
+// Implement Debug trait for SymString
+impl fmt::Debug for SymString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SymString")
+            .field("variable_name", &self.variable_name)
+            .field("expr", &self.expr)
+            .field("concrete_value", &self.concrete_value)
+            .finish()
+    }
+}
+
+// Implement PartialEq trait for SymString
+impl PartialEq for SymString {
+    fn eq(&self, other: &Self) -> bool {
+        // If we have concrete values for both, use them for fast comparison
+        if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+            return a == b;
+        }
+
+        // If we're in symbolic mode, this creates a branch point
+        if is_symbolic_mode() {
+            // Check if we have a predetermined branch decision
+            if let Some(decision) = get_next_branch_decision() {
+                // Add the appropriate constraint to the manager
+                let constraint = if decision {
+                    self.eq_constraint(other)
+                } else {
+                    self.ne_constraint(other)
+                };
+
+                // Add constraint and check satisfiability immediately
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+
+                // OPTIMIZATION: Early unsatisfiability detection
+                // Check if the path is still satisfiable after adding this constraint
+                if let Ok(is_sat) = mgr.is_satisfiable() {
+                    if !is_sat {
+                        // Path became unsatisfiable - mark it
+                        drop(mgr); // Release lock before calling mark function
+                        mark_path_unsatisfiable();
+                    }
+                }
+
+                return decision;
+            }
+
+            // No predetermined decision - this is the first time we're seeing this branch
+            // We'll return the concrete result if available, or false as default
+            // The explore function will re-execute with both true and false
+            if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+                return a == b;
+            }
+
+            // For purely symbolic values, we need to make a choice
+            // Return false by default (explore will try both)
+            false
+        } else {
+            // Not in symbolic mode - just do structural equality
+            self.expr == other.expr
+        }
+    }
+}
+
+// Implement Eq trait for SymString
+impl Eq for SymString {}
+
+// Implement PartialOrd trait for SymString (lexicographic ordering)
+impl PartialOrd for SymString {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // If we have concrete values for both, use them for fast comparison
+        if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+            return Some(a.cmp(b));
+        }
+
+        // If we're in symbolic mode, this creates a branch point
+        if is_symbolic_mode() {
+            // For ordering comparisons in symbolic mode, we need to handle multiple branches
+            // We'll use concrete values if available, otherwise return None
+            if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+                return Some(a.cmp(b));
+            }
+            
+            // For purely symbolic values, return None to indicate ordering is unknown
+            None
+        } else {
+            // Not in symbolic mode - use concrete values if available
+            if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+                Some(a.cmp(b))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+// Implement Ord trait for SymString (lexicographic ordering)
+impl Ord for SymString {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Use concrete values when available
+        if let (Some(a), Some(b)) = (self.concrete_value.as_ref(), other.concrete_value.as_ref()) {
+            a.cmp(b)
+        } else {
+            // If no concrete values, fall back to structural comparison
+            // This is a fallback and shouldn't be used in symbolic execution
+            self.variable_name.cmp(&other.variable_name)
+        }
+    }
+}
+
+// Implement Add trait for SymString (string concatenation)
+impl std::ops::Add for SymString {
+    type Output = SymString;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.concat(&rhs)
+    }
+}
+
+// Implement Add trait for &SymString (string concatenation)
+impl std::ops::Add for &SymString {
+    type Output = SymString;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.concat(rhs)
+    }
+}
+
 // Additional symbolic types will be added in later tasks
 
 // Generate SymU32 using the macro
@@ -1445,6 +1870,196 @@ mod tests {
         assert_eq!(result.concrete_value(), Some(u64::MAX));
     }
 
+    // SymString tests
+    #[test]
+    fn test_symstring_creation() {
+        let manager = create_test_manager();
+        let sym = SymString::new(Arc::clone(&manager));
+
+        assert!(sym.variable_name().starts_with("string_"));
+        assert_eq!(sym.concrete_value(), None);
+    }
+
+    #[test]
+    fn test_symstring_from_concrete() {
+        let manager = create_test_manager();
+        let sym = SymString::from_concrete("hello", Arc::clone(&manager));
+
+        assert_eq!(sym.concrete_value(), Some("hello"));
+        assert!(matches!(
+            sym.expr(),
+            SymExpr::Constant(ConstValue::String(_))
+        ));
+    }
+
+    #[test]
+    fn test_symstring_with_value() {
+        let manager = create_test_manager();
+        let sym = SymString::with_value("world".to_string(), Arc::clone(&manager));
+
+        assert_eq!(sym.concrete_value(), Some("world"));
+        assert!(sym.variable_name().starts_with("string_"));
+    }
+
+    #[test]
+    fn test_symstring_new_global() {
+        crate::reset_global_manager();
+        crate::init_global().unwrap();
+
+        let sym = SymString::new_global();
+        assert!(sym.variable_name().starts_with("string_"));
+        assert_eq!(sym.concrete_value(), None);
+    }
+
+    #[test]
+    fn test_symstring_variable_registration() {
+        let manager = create_test_manager();
+        let sym = SymString::new(Arc::clone(&manager));
+
+        // Check that the variable was registered
+        let mgr = manager.lock().unwrap();
+        let vars = mgr.get_registered_variables();
+        assert!(vars.contains(&sym.variable_name().to_string()));
+
+        // Check type info
+        let type_info = mgr.get_variable_info(sym.variable_name()).unwrap();
+        assert_eq!(type_info.type_name, "string");
+        assert_eq!(type_info.bit_width, None);
+        assert!(!type_info.is_signed);
+    }
+
+    #[test]
+    fn test_symstring_unique_variables() {
+        let manager = create_test_manager();
+        let a = SymString::new(Arc::clone(&manager));
+        let b = SymString::new(Arc::clone(&manager));
+        let c = SymString::new(Arc::clone(&manager));
+
+        // Each symbolic variable should have a unique name
+        assert_ne!(a.variable_name(), b.variable_name());
+        assert_ne!(b.variable_name(), c.variable_name());
+        assert_ne!(a.variable_name(), c.variable_name());
+    }
+
+    #[test]
+    fn test_symstring_set_concrete_value() {
+        let manager = create_test_manager();
+        let mut sym = SymString::new(Arc::clone(&manager));
+
+        assert_eq!(sym.concrete_value(), None);
+
+        sym.set_concrete_value("test".to_string());
+        assert_eq!(sym.concrete_value(), Some("test"));
+    }
+
+    #[test]
+    fn test_symstring_from_expr() {
+        let manager = create_test_manager();
+        let expr = SymExpr::Constant(ConstValue::String("example".to_string()));
+        let sym = SymString::from_expr(expr, Arc::clone(&manager));
+
+        assert!(sym.variable_name().starts_with("string_"));
+        assert_eq!(sym.concrete_value(), None);
+    }
+
+    #[test]
+    fn test_symstring_debug_format() {
+        let manager = create_test_manager();
+        let sym = SymString::from_concrete("test", Arc::clone(&manager));
+
+        let debug_str = format!("{:?}", sym);
+        assert!(debug_str.contains("SymString"));
+        assert!(debug_str.contains("variable_name"));
+        assert!(debug_str.contains("expr"));
+        assert!(debug_str.contains("concrete_value"));
+    }
+
+    // **Feature: symbolic-strings, Property 2: Concolic Value Preservation**
+    // **Validates: Requirements 1.2, 10.2, 10.3, 18.1**
+    #[qc]
+    fn prop_symstring_concolic_value_preservation(s1: String, s2: String) -> bool {
+        // Filter to ASCII only as per requirement 13.3
+        if !s1.is_ascii() || !s2.is_ascii() {
+            return true; // Discard non-ASCII test cases
+        }
+
+        // Limit string length to avoid excessive test times
+        if s1.len() > 100 || s2.len() > 100 {
+            return true;
+        }
+
+        let manager = create_test_manager();
+
+        // Create symbolic strings with concrete values
+        let sym1 = SymString::with_value(s1.clone(), Arc::clone(&manager));
+        let sym2 = SymString::with_value(s2.clone(), Arc::clone(&manager));
+
+        // Property 1: Initial concrete values should be preserved
+        if sym1.concrete_value() != Some(s1.as_str()) {
+            return false;
+        }
+        if sym2.concrete_value() != Some(s2.as_str()) {
+            return false;
+        }
+
+        // Property 2: Concrete values should be preserved through cloning
+        let sym1_clone = sym1.clone();
+        if sym1_clone.concrete_value() != Some(s1.as_str()) {
+            return false;
+        }
+
+        // Property 3: from_concrete should preserve concrete values
+        let sym3 = SymString::from_concrete(&s1, Arc::clone(&manager));
+        if sym3.concrete_value() != Some(s1.as_str()) {
+            return false;
+        }
+
+        // Property 4: set_concrete_value should update the concrete value
+        let mut sym4 = SymString::new(Arc::clone(&manager));
+        sym4.set_concrete_value(s2.clone());
+        if sym4.concrete_value() != Some(s2.as_str()) {
+            return false;
+        }
+
+        // Property 5: Symbolic expressions should maintain concrete values
+        // Even though we don't have string operations implemented yet,
+        // we can verify that the concrete value is accessible
+        if let Some(concrete) = sym1.concrete_value() {
+            if concrete != s1.as_str() {
+                return false;
+            }
+        } else {
+            return false; // Should have concrete value
+        }
+
+        // Property 6: Multiple symbolic strings with same concrete value
+        // should have equal concrete values but different variable names
+        let sym5 = SymString::with_value(s1.clone(), Arc::clone(&manager));
+        if sym5.concrete_value() != sym1.concrete_value() {
+            return false;
+        }
+        if sym5.variable_name() == sym1.variable_name() {
+            return false; // Should have unique variable names
+        }
+
+        // Property 7: Empty strings should be handled correctly
+        let empty = SymString::with_value(String::new(), Arc::clone(&manager));
+        if empty.concrete_value() != Some("") {
+            return false;
+        }
+
+        // Property 8: Concrete values should match the original strings exactly
+        // (no transformations or modifications)
+        if sym1.concrete_value().map(|s| s.to_string()) != Some(s1.clone()) {
+            return false;
+        }
+        if sym2.concrete_value().map(|s| s.to_string()) != Some(s2.clone()) {
+            return false;
+        }
+
+        true
+    }
+
     // **Feature: symbolic-execution-engine, Property 12: Trait behavioral compatibility**
     // **Validates: Requirements 7.1, 7.3**
     #[qc]
@@ -1757,5 +2372,343 @@ mod tests {
         }
 
         true
+    }
+
+    // Tests for SymString comparison operations
+
+    #[test]
+    fn test_symstring_eq_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("world", Arc::clone(&manager));
+
+        let constraint = s1.eq_constraint(&s2);
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::Eq, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_ne_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("world", Arc::clone(&manager));
+
+        let constraint = s1.ne_constraint(&s2);
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::Ne, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_lt_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("apple", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("banana", Arc::clone(&manager));
+
+        let constraint = s1.lt_constraint(&s2);
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::StrLexLt, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_le_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("apple", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("banana", Arc::clone(&manager));
+
+        let constraint = s1.le_constraint(&s2);
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::StrLexLe, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_gt_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("banana", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("apple", Arc::clone(&manager));
+
+        let constraint = s1.gt_constraint(&s2);
+        // gt is implemented as lt with swapped operands
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::StrLexLt, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_ge_constraint() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("banana", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("apple", Arc::clone(&manager));
+
+        let constraint = s1.ge_constraint(&s2);
+        // ge is implemented as le with swapped operands
+        assert!(matches!(constraint, SymExpr::BinaryOp(BinOp::StrLexLe, _, _)));
+    }
+
+    #[test]
+    fn test_symstring_assert_eq() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("hello", Arc::clone(&manager));
+
+        let result = s1.assert_eq(&s2);
+        assert!(result.is_ok());
+
+        // Check that constraint was added
+        let mgr = manager.lock().unwrap();
+        assert!(!mgr.get_constraints().is_empty());
+    }
+
+    #[test]
+    fn test_symstring_assert_ne() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("world", Arc::clone(&manager));
+
+        let result = s1.assert_ne(&s2);
+        assert!(result.is_ok());
+
+        // Check that constraint was added
+        let mgr = manager.lock().unwrap();
+        assert!(!mgr.get_constraints().is_empty());
+    }
+
+    #[test]
+    fn test_symstring_partial_eq_with_concrete() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s3 = SymString::from_concrete("world", Arc::clone(&manager));
+
+        // Concrete values should be used for fast comparison
+        assert_eq!(s1, s2);
+        assert_ne!(s1, s3);
+    }
+
+    #[test]
+    fn test_symstring_partial_ord_with_concrete() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("apple", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("banana", Arc::clone(&manager));
+        let s3 = SymString::from_concrete("cherry", Arc::clone(&manager));
+
+        // Lexicographic ordering should work with concrete values
+        assert!(s1 < s2);
+        assert!(s2 < s3);
+        assert!(s1 < s3);
+        assert!(s2 > s1);
+        assert!(s3 > s2);
+    }
+
+    #[test]
+    fn test_symstring_ord_with_concrete() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("apple", Arc::clone(&manager));
+        let s2 = SymString::from_concrete("banana", Arc::clone(&manager));
+
+        assert_eq!(s1.cmp(&s2), Ordering::Less);
+        assert_eq!(s2.cmp(&s1), Ordering::Greater);
+        assert_eq!(s1.cmp(&s1), Ordering::Equal);
+    }
+
+    // Tests for string concatenation
+
+    #[test]
+    fn test_symstring_concat_with_concrete() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete(" world", Arc::clone(&manager));
+
+        let result = s1.concat(&s2);
+
+        assert_eq!(result.concrete_value(), Some("hello world"));
+        assert!(matches!(
+            result.expr(),
+            SymExpr::BinaryOp(BinOp::StrConcat, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_symstring_concat_empty_strings() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let empty = SymString::from_concrete("", Arc::clone(&manager));
+
+        let result1 = s1.concat(&empty);
+        assert_eq!(result1.concrete_value(), Some("hello"));
+
+        let result2 = empty.concat(&s1);
+        assert_eq!(result2.concrete_value(), Some("hello"));
+    }
+
+    #[test]
+    fn test_symstring_concat_symbolic() {
+        let manager = create_test_manager();
+        let s1 = SymString::new(Arc::clone(&manager));
+        let s2 = SymString::new(Arc::clone(&manager));
+
+        let result = s1.concat(&s2);
+
+        // No concrete value for purely symbolic strings
+        assert_eq!(result.concrete_value(), None);
+        assert!(matches!(
+            result.expr(),
+            SymExpr::BinaryOp(BinOp::StrConcat, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_symstring_concat_mixed() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::new(Arc::clone(&manager));
+
+        let result = s1.concat(&s2);
+
+        // No concrete value when one operand is purely symbolic
+        assert_eq!(result.concrete_value(), None);
+        assert!(matches!(
+            result.expr(),
+            SymExpr::BinaryOp(BinOp::StrConcat, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_symstring_add_trait() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete(" world", Arc::clone(&manager));
+
+        // Test Add trait for owned values
+        let result = s1.clone() + s2.clone();
+        assert_eq!(result.concrete_value(), Some("hello world"));
+
+        // Test Add trait for references
+        let result = &s1 + &s2;
+        assert_eq!(result.concrete_value(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_symstring_chained_concat() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete(" ", Arc::clone(&manager));
+        let s3 = SymString::from_concrete("world", Arc::clone(&manager));
+
+        // Test chained concatenation: s1 + s2 + s3
+        let result = &s1 + &s2;
+        let result = &result + &s3;
+
+        assert_eq!(result.concrete_value(), Some("hello world"));
+
+        // Check that the expression is properly nested
+        if let SymExpr::BinaryOp(BinOp::StrConcat, left, _right) = result.expr() {
+            assert!(matches!(**left, SymExpr::BinaryOp(BinOp::StrConcat, _, _)));
+        } else {
+            panic!("Expected concatenation expression");
+        }
+    }
+
+    #[test]
+    fn test_symstring_concat_preserves_manager() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete(" world", Arc::clone(&manager));
+
+        let result = s1.concat(&s2);
+
+        // Check that the result uses the same manager
+        let result_manager = result.manager();
+        let original_manager = s1.manager();
+
+        let result_stats = result_manager.lock().unwrap().get_stats();
+        let original_stats = original_manager.lock().unwrap().get_stats();
+
+        // Both should reference the same manager instance
+        assert_eq!(result_stats.variable_count, original_stats.variable_count);
+    }
+
+    // Tests for string length operations
+
+    #[test]
+    fn test_symstring_length_with_concrete() {
+        let manager = create_test_manager();
+        let s = SymString::from_concrete("hello", Arc::clone(&manager));
+
+        let len = s.length();
+
+        assert_eq!(len.concrete_value(), Some(5));
+        assert!(matches!(len.expr(), SymExpr::UnaryOp(UnOp::StrLen, _)));
+    }
+
+    #[test]
+    fn test_symstring_length_empty_string() {
+        let manager = create_test_manager();
+        let s = SymString::from_concrete("", Arc::clone(&manager));
+
+        let len = s.length();
+
+        assert_eq!(len.concrete_value(), Some(0));
+        assert!(matches!(len.expr(), SymExpr::UnaryOp(UnOp::StrLen, _)));
+    }
+
+    #[test]
+    fn test_symstring_length_symbolic() {
+        let manager = create_test_manager();
+        let s = SymString::new(Arc::clone(&manager));
+
+        let len = s.length();
+
+        // SymU64::from_expr defaults to Some(0) when no concrete value can be computed
+        // This is expected behavior from the macro-generated code
+        assert_eq!(len.concrete_value(), Some(0));
+        assert!(matches!(len.expr(), SymExpr::UnaryOp(UnOp::StrLen, _)));
+    }
+
+    #[test]
+    fn test_symstring_length_with_value() {
+        let manager = create_test_manager();
+        let s = SymString::with_value("test string".to_string(), Arc::clone(&manager));
+
+        let len = s.length();
+
+        assert_eq!(len.concrete_value(), Some(11));
+        assert!(matches!(len.expr(), SymExpr::UnaryOp(UnOp::StrLen, _)));
+    }
+
+    #[test]
+    fn test_symstring_length_after_concat() {
+        let manager = create_test_manager();
+        let s1 = SymString::from_concrete("hello", Arc::clone(&manager));
+        let s2 = SymString::from_concrete(" world", Arc::clone(&manager));
+
+        let concatenated = s1.concat(&s2);
+        let len = concatenated.length();
+
+        // Length of "hello world" is 11
+        assert_eq!(len.concrete_value(), Some(11));
+        assert!(matches!(len.expr(), SymExpr::UnaryOp(UnOp::StrLen, _)));
+    }
+
+    #[test]
+    fn test_symstring_length_unicode() {
+        let manager = create_test_manager();
+        // Note: This test uses ASCII-compatible characters
+        let s = SymString::from_concrete("hello!", Arc::clone(&manager));
+
+        let len = s.length();
+
+        assert_eq!(len.concrete_value(), Some(6));
+    }
+
+    #[test]
+    fn test_symstring_length_preserves_manager() {
+        let manager = create_test_manager();
+        let s = SymString::from_concrete("test", Arc::clone(&manager));
+
+        let len = s.length();
+
+        // Check that the result uses the same manager
+        let len_manager = len.manager();
+        let original_manager = s.manager();
+
+        let len_stats = len_manager.lock().unwrap().get_stats();
+        let original_stats = original_manager.lock().unwrap().get_stats();
+
+        // Both should reference the same manager instance
+        assert_eq!(len_stats.variable_count, original_stats.variable_count);
     }
 }

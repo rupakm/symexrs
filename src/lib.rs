@@ -26,7 +26,7 @@ pub use error::{SymExError, SymExResult};
 pub use expressions::{BinOp, ConstValue, SymExpr, UnOp};
 pub use manager::{ExecutionState, SymExManager, TypeInfo};
 pub use solver::{Model, SatResult, SmtSolver, Z3Solver};
-pub use symbolic_types::{SymBool, SymI32, SymI64, SymU8, SymU32, SymU64};
+pub use symbolic_types::{SymBool, SymI32, SymI64, SymString, SymU8, SymU32, SymU64};
 
 /// Version information
 pub const VERSION: &str = "0.1.0";

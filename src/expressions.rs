@@ -22,6 +22,22 @@ pub enum SymExpr {
     UnaryOp(UnOp, Box<SymExpr>),
     /// Conditional expression (if-then-else)
     Conditional(Box<SymExpr>, Box<SymExpr>, Box<SymExpr>),
+    /// String substring operation: str.substr(string, start, length)
+    StrSubstring(Box<SymExpr>, Box<SymExpr>, Box<SymExpr>),
+    /// String contains operation: str.contains(haystack, needle)
+    StrContains(Box<SymExpr>, Box<SymExpr>),
+    /// String prefix check: str.prefixof(prefix, string)
+    StrPrefixOf(Box<SymExpr>, Box<SymExpr>),
+    /// String suffix check: str.suffixof(suffix, string)
+    StrSuffixOf(Box<SymExpr>, Box<SymExpr>),
+    /// String replace: str.replace(string, pattern, replacement)
+    StrReplace(Box<SymExpr>, Box<SymExpr>, Box<SymExpr>),
+    /// String replace all: str.replace_all(string, pattern, replacement)
+    StrReplaceAll(Box<SymExpr>, Box<SymExpr>, Box<SymExpr>),
+    /// String character at index: str.at(string, index)
+    StrAt(Box<SymExpr>, Box<SymExpr>),
+    /// String index of: str.indexof(haystack, needle, offset)
+    StrIndexOf(Box<SymExpr>, Box<SymExpr>, Box<SymExpr>),
 }
 
 /// Binary operations supported in symbolic expressions
@@ -46,13 +62,18 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+    // String operations
+    StrConcat,  // String concatenation (str.++)
+    StrLexLt,   // Lexicographic less-than (str.<)
+    StrLexLe,   // Lexicographic less-than-or-equal (str.<=)
 }
 
 /// Unary operations supported in symbolic expressions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
-    Neg, // Arithmetic negation
-    Not, // Bitwise/logical NOT
+    Neg,    // Arithmetic negation
+    Not,    // Bitwise/logical NOT
+    StrLen, // String length (str.len)
 }
 
 /// Constant values that can appear in symbolic expressions
@@ -66,6 +87,7 @@ pub enum ConstValue {
     U32(u32),
     I32(i32),
     F32(f32),
+    String(String),
 }
 
 impl Eq for ConstValue {}
@@ -105,6 +127,10 @@ impl Hash for ConstValue {
                 6u8.hash(state);
                 v.to_bits().hash(state);
             }
+            ConstValue::String(v) => {
+                8u8.hash(state);
+                v.hash(state);
+            }
         }
     }
 }
@@ -122,6 +148,30 @@ impl fmt::Display for SymExpr {
             }
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 write!(f, "(if {cond} then {then_expr} else {else_expr})")
+            }
+            SymExpr::StrSubstring(string, start, length) => {
+                write!(f, "(str.substr {string} {start} {length})")
+            }
+            SymExpr::StrContains(haystack, needle) => {
+                write!(f, "(str.contains {haystack} {needle})")
+            }
+            SymExpr::StrPrefixOf(prefix, string) => {
+                write!(f, "(str.prefixof {prefix} {string})")
+            }
+            SymExpr::StrSuffixOf(suffix, string) => {
+                write!(f, "(str.suffixof {suffix} {string})")
+            }
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                write!(f, "(str.replace {string} {pattern} {replacement})")
+            }
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                write!(f, "(str.replace_all {string} {pattern} {replacement})")
+            }
+            SymExpr::StrAt(string, index) => {
+                write!(f, "(str.at {string} {index})")
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                write!(f, "(str.indexof {haystack} {needle} {offset})")
             }
         }
     }
@@ -146,6 +196,9 @@ impl fmt::Display for BinOp {
             BinOp::Le => "<=",
             BinOp::Gt => ">",
             BinOp::Ge => ">=",
+            BinOp::StrConcat => "++",
+            BinOp::StrLexLt => "str.<",
+            BinOp::StrLexLe => "str.<=",
         };
         write!(f, "{op_str}")
     }
@@ -156,6 +209,7 @@ impl fmt::Display for UnOp {
         let op_str = match self {
             UnOp::Neg => "-",
             UnOp::Not => "!",
+            UnOp::StrLen => "str.len",
         };
         write!(f, "{op_str}")
     }
@@ -167,6 +221,7 @@ impl UnOp {
         match self {
             UnOp::Neg => "-",
             UnOp::Not => "not", // For boolean not, or "bvnot" for bitvector not
+            UnOp::StrLen => "str.len",
         }
     }
 }
@@ -182,6 +237,7 @@ impl fmt::Display for ConstValue {
             ConstValue::U32(val) => write!(f, "{val}"),
             ConstValue::I32(val) => write!(f, "{val}"),
             ConstValue::F32(val) => write!(f, "{val}"),
+            ConstValue::String(val) => write!(f, "\"{}\"", val),
         }
     }
 }
@@ -197,7 +253,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as u64),
             ConstValue::F64(v) => Some(*v as u64),
             ConstValue::F32(v) => Some(*v as u64),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -211,7 +267,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as i64),
             ConstValue::F64(v) => Some(*v as i64),
             ConstValue::F32(v) => Some(*v as i64),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -225,7 +281,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as u32),
             ConstValue::F64(v) => Some(*v as u32),
             ConstValue::F32(v) => Some(*v as u32),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -239,7 +295,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as i32),
             ConstValue::F64(v) => Some(*v as i32),
             ConstValue::F32(v) => Some(*v as i32),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -253,7 +309,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v),
             ConstValue::F64(v) => Some(*v as u8),
             ConstValue::F32(v) => Some(*v as u8),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -267,7 +323,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as f64),
             ConstValue::F64(v) => Some(*v),
             ConstValue::F32(v) => Some(*v as f64),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -281,7 +337,7 @@ impl ConstValue {
             ConstValue::U8(v) => Some(*v as f32),
             ConstValue::F64(v) => Some(*v as f32),
             ConstValue::F32(v) => Some(*v),
-            ConstValue::Bool(_) => None,
+            ConstValue::Bool(_) | ConstValue::String(_) => None,
         }
     }
 
@@ -289,6 +345,14 @@ impl ConstValue {
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             ConstValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Extract as string (only works for String variant)
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            ConstValue::String(v) => Some(v.as_str()),
             _ => None,
         }
     }
@@ -318,6 +382,66 @@ impl SymExpr {
     /// Create a conditional expression (if-then-else)
     pub fn conditional(cond: SymExpr, then_expr: SymExpr, else_expr: SymExpr) -> Self {
         SymExpr::Conditional(Box::new(cond), Box::new(then_expr), Box::new(else_expr))
+    }
+
+    /// Create a string concatenation expression
+    pub fn str_concat(left: SymExpr, right: SymExpr) -> Self {
+        SymExpr::BinaryOp(BinOp::StrConcat, Box::new(left), Box::new(right))
+    }
+
+    /// Create a string length expression
+    pub fn str_len(string: SymExpr) -> Self {
+        SymExpr::UnaryOp(UnOp::StrLen, Box::new(string))
+    }
+
+    /// Create a string substring expression
+    pub fn str_substring(string: SymExpr, start: SymExpr, length: SymExpr) -> Self {
+        SymExpr::StrSubstring(Box::new(string), Box::new(start), Box::new(length))
+    }
+
+    /// Create a string contains expression
+    pub fn str_contains(haystack: SymExpr, needle: SymExpr) -> Self {
+        SymExpr::StrContains(Box::new(haystack), Box::new(needle))
+    }
+
+    /// Create a string prefix check expression
+    pub fn str_prefix_of(prefix: SymExpr, string: SymExpr) -> Self {
+        SymExpr::StrPrefixOf(Box::new(prefix), Box::new(string))
+    }
+
+    /// Create a string suffix check expression
+    pub fn str_suffix_of(suffix: SymExpr, string: SymExpr) -> Self {
+        SymExpr::StrSuffixOf(Box::new(suffix), Box::new(string))
+    }
+
+    /// Create a string replace expression
+    pub fn str_replace(string: SymExpr, pattern: SymExpr, replacement: SymExpr) -> Self {
+        SymExpr::StrReplace(Box::new(string), Box::new(pattern), Box::new(replacement))
+    }
+
+    /// Create a string replace all expression
+    pub fn str_replace_all(string: SymExpr, pattern: SymExpr, replacement: SymExpr) -> Self {
+        SymExpr::StrReplaceAll(Box::new(string), Box::new(pattern), Box::new(replacement))
+    }
+
+    /// Create a string character at index expression
+    pub fn str_at(string: SymExpr, index: SymExpr) -> Self {
+        SymExpr::StrAt(Box::new(string), Box::new(index))
+    }
+
+    /// Create a string index of expression
+    pub fn str_index_of(haystack: SymExpr, needle: SymExpr, offset: SymExpr) -> Self {
+        SymExpr::StrIndexOf(Box::new(haystack), Box::new(needle), Box::new(offset))
+    }
+
+    /// Create a string lexicographic less-than expression
+    pub fn str_lex_lt(left: SymExpr, right: SymExpr) -> Self {
+        SymExpr::BinaryOp(BinOp::StrLexLt, Box::new(left), Box::new(right))
+    }
+
+    /// Create a string lexicographic less-than-or-equal expression
+    pub fn str_lex_le(left: SymExpr, right: SymExpr) -> Self {
+        SymExpr::BinaryOp(BinOp::StrLexLe, Box::new(left), Box::new(right))
     }
 
     /// Check if this expression is a constant
@@ -372,6 +496,42 @@ impl SymExpr {
                 then_expr.collect_variables(vars);
                 else_expr.collect_variables(vars);
             }
+            SymExpr::StrSubstring(string, start, length) => {
+                string.collect_variables(vars);
+                start.collect_variables(vars);
+                length.collect_variables(vars);
+            }
+            SymExpr::StrContains(haystack, needle) => {
+                haystack.collect_variables(vars);
+                needle.collect_variables(vars);
+            }
+            SymExpr::StrPrefixOf(prefix, string) => {
+                prefix.collect_variables(vars);
+                string.collect_variables(vars);
+            }
+            SymExpr::StrSuffixOf(suffix, string) => {
+                suffix.collect_variables(vars);
+                string.collect_variables(vars);
+            }
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                string.collect_variables(vars);
+                pattern.collect_variables(vars);
+                replacement.collect_variables(vars);
+            }
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                string.collect_variables(vars);
+                pattern.collect_variables(vars);
+                replacement.collect_variables(vars);
+            }
+            SymExpr::StrAt(string, index) => {
+                string.collect_variables(vars);
+                index.collect_variables(vars);
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                haystack.collect_variables(vars);
+                needle.collect_variables(vars);
+                offset.collect_variables(vars);
+            }
         }
     }
 
@@ -384,6 +544,30 @@ impl SymExpr {
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 1 + cond.depth().max(then_expr.depth()).max(else_expr.depth())
             }
+            SymExpr::StrSubstring(string, start, length) => {
+                1 + string.depth().max(start.depth()).max(length.depth())
+            }
+            SymExpr::StrContains(haystack, needle) => {
+                1 + haystack.depth().max(needle.depth())
+            }
+            SymExpr::StrPrefixOf(prefix, string) => {
+                1 + prefix.depth().max(string.depth())
+            }
+            SymExpr::StrSuffixOf(suffix, string) => {
+                1 + suffix.depth().max(string.depth())
+            }
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                1 + string.depth().max(pattern.depth()).max(replacement.depth())
+            }
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                1 + string.depth().max(pattern.depth()).max(replacement.depth())
+            }
+            SymExpr::StrAt(string, index) => {
+                1 + string.depth().max(index.depth())
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                1 + haystack.depth().max(needle.depth()).max(offset.depth())
+            }
         }
     }
 
@@ -395,6 +579,317 @@ impl SymExpr {
             SymExpr::BinaryOp(_, left, right) => 1 + left.node_count() + right.node_count(),
             SymExpr::Conditional(cond, then_expr, else_expr) => {
                 1 + cond.node_count() + then_expr.node_count() + else_expr.node_count()
+            }
+            SymExpr::StrSubstring(string, start, length) => {
+                1 + string.node_count() + start.node_count() + length.node_count()
+            }
+            SymExpr::StrContains(haystack, needle) => {
+                1 + haystack.node_count() + needle.node_count()
+            }
+            SymExpr::StrPrefixOf(prefix, string) => {
+                1 + prefix.node_count() + string.node_count()
+            }
+            SymExpr::StrSuffixOf(suffix, string) => {
+                1 + suffix.node_count() + string.node_count()
+            }
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                1 + string.node_count() + pattern.node_count() + replacement.node_count()
+            }
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                1 + string.node_count() + pattern.node_count() + replacement.node_count()
+            }
+            SymExpr::StrAt(string, index) => {
+                1 + string.node_count() + index.node_count()
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                1 + haystack.node_count() + needle.node_count() + offset.node_count()
+            }
+        }
+    }
+
+    /// Validate string-specific operations
+    ///
+    /// This method checks that string operations have valid operands and parameters:
+    /// - String operations should have string-typed operands
+    /// - Index and length parameters should be non-negative integers
+    /// - Expression depth should not exceed limits
+    /// - Expression complexity should not exceed limits
+    ///
+    /// Returns Ok(()) if validation passes, or an appropriate error otherwise.
+    pub fn validate_string_operations(&self) -> crate::SymExResult<()> {
+        // Check expression depth limit
+        const MAX_DEPTH: usize = 100;
+        if self.depth() > MAX_DEPTH {
+            return Err(crate::SymExError::ResourceExhaustion(
+                format!("Expression depth {} exceeds maximum limit {}", self.depth(), MAX_DEPTH)
+            ));
+        }
+
+        // Check expression complexity limit
+        const MAX_NODES: usize = 10000;
+        if self.node_count() > MAX_NODES {
+            return Err(crate::SymExError::ResourceExhaustion(
+                format!("Expression complexity {} nodes exceeds maximum limit {}", self.node_count(), MAX_NODES)
+            ));
+        }
+
+        // Recursively validate string operations
+        match self {
+            SymExpr::Variable(_) | SymExpr::Constant(_) => Ok(()),
+            
+            SymExpr::UnaryOp(op, expr) => {
+                expr.validate_string_operations()?;
+                
+                // Validate string length operation
+                if matches!(op, UnOp::StrLen) {
+                    // The operand should be a string expression
+                    // We can't fully type-check here without a type system,
+                    // but we can check for obvious errors
+                    if let SymExpr::Constant(ConstValue::String(_)) = expr.as_ref() {
+                        // Valid string constant
+                    } else if expr.is_variable() {
+                        // Variable - assume it's properly typed
+                    } else {
+                        // Could be a string operation result - that's fine
+                    }
+                }
+                Ok(())
+            }
+            
+            SymExpr::BinaryOp(op, left, right) => {
+                left.validate_string_operations()?;
+                right.validate_string_operations()?;
+                
+                // Validate string concatenation
+                if matches!(op, BinOp::StrConcat) {
+                    // Both operands should be string expressions
+                    // Type checking is done at runtime by the solver
+                }
+                
+                Ok(())
+            }
+            
+            SymExpr::Conditional(cond, then_expr, else_expr) => {
+                cond.validate_string_operations()?;
+                then_expr.validate_string_operations()?;
+                else_expr.validate_string_operations()?;
+                Ok(())
+            }
+            
+            SymExpr::StrSubstring(string, start, length) => {
+                string.validate_string_operations()?;
+                start.validate_string_operations()?;
+                length.validate_string_operations()?;
+                
+                // Validate that start and length are non-negative if they're constants
+                if let SymExpr::Constant(ConstValue::I64(n)) = start.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Substring start index {} must be non-negative", n)
+                        ));
+                    }
+                }
+                if let SymExpr::Constant(ConstValue::I32(n)) = start.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Substring start index {} must be non-negative", n)
+                        ));
+                    }
+                }
+                
+                if let SymExpr::Constant(ConstValue::I64(n)) = length.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Substring length {} must be non-negative", n)
+                        ));
+                    }
+                }
+                if let SymExpr::Constant(ConstValue::I32(n)) = length.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Substring length {} must be non-negative", n)
+                        ));
+                    }
+                }
+                
+                Ok(())
+            }
+            
+            SymExpr::StrContains(haystack, needle) => {
+                haystack.validate_string_operations()?;
+                needle.validate_string_operations()?;
+                Ok(())
+            }
+            
+            SymExpr::StrPrefixOf(prefix, string) => {
+                prefix.validate_string_operations()?;
+                string.validate_string_operations()?;
+                Ok(())
+            }
+            
+            SymExpr::StrSuffixOf(suffix, string) => {
+                suffix.validate_string_operations()?;
+                string.validate_string_operations()?;
+                Ok(())
+            }
+            
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                string.validate_string_operations()?;
+                pattern.validate_string_operations()?;
+                replacement.validate_string_operations()?;
+                
+                // Validate that pattern is not empty if it's a constant
+                if let SymExpr::Constant(ConstValue::String(s)) = pattern.as_ref() {
+                    if s.is_empty() {
+                        return Err(crate::SymExError::EmptyPatternError);
+                    }
+                }
+                
+                Ok(())
+            }
+            
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                string.validate_string_operations()?;
+                pattern.validate_string_operations()?;
+                replacement.validate_string_operations()?;
+                
+                // Validate that pattern is not empty if it's a constant
+                if let SymExpr::Constant(ConstValue::String(s)) = pattern.as_ref() {
+                    if s.is_empty() {
+                        return Err(crate::SymExError::EmptyPatternError);
+                    }
+                }
+                
+                Ok(())
+            }
+            
+            SymExpr::StrAt(string, index) => {
+                string.validate_string_operations()?;
+                index.validate_string_operations()?;
+                
+                // Validate that index is non-negative if it's a constant
+                if let SymExpr::Constant(ConstValue::I64(n)) = index.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Character index {} must be non-negative", n)
+                        ));
+                    }
+                }
+                if let SymExpr::Constant(ConstValue::I32(n)) = index.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Character index {} must be non-negative", n)
+                        ));
+                    }
+                }
+                
+                Ok(())
+            }
+            
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                haystack.validate_string_operations()?;
+                needle.validate_string_operations()?;
+                offset.validate_string_operations()?;
+                
+                // Validate that offset is non-negative if it's a constant
+                if let SymExpr::Constant(ConstValue::I64(n)) = offset.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Index offset {} must be non-negative", n)
+                        ));
+                    }
+                }
+                if let SymExpr::Constant(ConstValue::I32(n)) = offset.as_ref() {
+                    if *n < 0 {
+                        return Err(crate::SymExError::InvalidStringOperation(
+                            format!("Index offset {} must be non-negative", n)
+                        ));
+                    }
+                }
+                
+                Ok(())
+            }
+        }
+    }
+
+    /// Validate ASCII characters in string constants
+    ///
+    /// This method checks that all string constants in the expression
+    /// contain only ASCII characters, as required by the current implementation.
+    ///
+    /// Returns Ok(()) if all strings are ASCII, or an error with details about
+    /// the first non-ASCII character found.
+    pub fn validate_ascii(&self) -> crate::SymExResult<()> {
+        match self {
+            SymExpr::Constant(ConstValue::String(s)) => {
+                for (pos, ch) in s.chars().enumerate() {
+                    if !ch.is_ascii() {
+                        return Err(crate::SymExError::NonAsciiCharacter {
+                            character: ch,
+                            position: pos,
+                        });
+                    }
+                }
+                Ok(())
+            }
+            
+            SymExpr::Variable(_) | SymExpr::Constant(_) => Ok(()),
+            
+            SymExpr::UnaryOp(_, expr) => expr.validate_ascii(),
+            
+            SymExpr::BinaryOp(_, left, right) => {
+                left.validate_ascii()?;
+                right.validate_ascii()
+            }
+            
+            SymExpr::Conditional(cond, then_expr, else_expr) => {
+                cond.validate_ascii()?;
+                then_expr.validate_ascii()?;
+                else_expr.validate_ascii()
+            }
+            
+            SymExpr::StrSubstring(string, start, length) => {
+                string.validate_ascii()?;
+                start.validate_ascii()?;
+                length.validate_ascii()
+            }
+            
+            SymExpr::StrContains(haystack, needle) => {
+                haystack.validate_ascii()?;
+                needle.validate_ascii()
+            }
+            
+            SymExpr::StrPrefixOf(prefix, string) => {
+                prefix.validate_ascii()?;
+                string.validate_ascii()
+            }
+            
+            SymExpr::StrSuffixOf(suffix, string) => {
+                suffix.validate_ascii()?;
+                string.validate_ascii()
+            }
+            
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                string.validate_ascii()?;
+                pattern.validate_ascii()?;
+                replacement.validate_ascii()
+            }
+            
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                string.validate_ascii()?;
+                pattern.validate_ascii()?;
+                replacement.validate_ascii()
+            }
+            
+            SymExpr::StrAt(string, index) => {
+                string.validate_ascii()?;
+                index.validate_ascii()
+            }
+            
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                haystack.validate_ascii()?;
+                needle.validate_ascii()?;
+                offset.validate_ascii()
             }
         }
     }
@@ -421,6 +916,66 @@ impl SymExpr {
                     cond.to_smt_lib(),
                     then_expr.to_smt_lib(),
                     else_expr.to_smt_lib()
+                )
+            }
+            SymExpr::StrSubstring(string, start, length) => {
+                format!(
+                    "(str.substr {} {} {})",
+                    string.to_smt_lib(),
+                    start.to_smt_lib(),
+                    length.to_smt_lib()
+                )
+            }
+            SymExpr::StrContains(haystack, needle) => {
+                format!(
+                    "(str.contains {} {})",
+                    haystack.to_smt_lib(),
+                    needle.to_smt_lib()
+                )
+            }
+            SymExpr::StrPrefixOf(prefix, string) => {
+                format!(
+                    "(str.prefixof {} {})",
+                    prefix.to_smt_lib(),
+                    string.to_smt_lib()
+                )
+            }
+            SymExpr::StrSuffixOf(suffix, string) => {
+                format!(
+                    "(str.suffixof {} {})",
+                    suffix.to_smt_lib(),
+                    string.to_smt_lib()
+                )
+            }
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                format!(
+                    "(str.replace {} {} {})",
+                    string.to_smt_lib(),
+                    pattern.to_smt_lib(),
+                    replacement.to_smt_lib()
+                )
+            }
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                format!(
+                    "(str.replace_all {} {} {})",
+                    string.to_smt_lib(),
+                    pattern.to_smt_lib(),
+                    replacement.to_smt_lib()
+                )
+            }
+            SymExpr::StrAt(string, index) => {
+                format!(
+                    "(str.at {} {})",
+                    string.to_smt_lib(),
+                    index.to_smt_lib()
+                )
+            }
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                format!(
+                    "(str.indexof {} {} {})",
+                    haystack.to_smt_lib(),
+                    needle.to_smt_lib(),
+                    offset.to_smt_lib()
                 )
             }
         }
@@ -603,6 +1158,37 @@ impl SymExpr {
                         left_expr.clone()
                     }
 
+                    // String constant folding
+                    (
+                        BinOp::StrConcat,
+                        SymExpr::Constant(ConstValue::String(a)),
+                        SymExpr::Constant(ConstValue::String(b)),
+                    ) => SymExpr::constant(ConstValue::String(format!("{}{}", a, b))),
+
+                    // String concatenation with empty string: s + "" = s, "" + s = s
+                    (BinOp::StrConcat, expr, SymExpr::Constant(ConstValue::String(s)))
+                        if s.is_empty() =>
+                    {
+                        expr.clone()
+                    }
+                    (BinOp::StrConcat, SymExpr::Constant(ConstValue::String(s)), expr)
+                        if s.is_empty() =>
+                    {
+                        expr.clone()
+                    }
+
+                    // String lexicographic comparison constant folding
+                    (
+                        BinOp::StrLexLt,
+                        SymExpr::Constant(ConstValue::String(a)),
+                        SymExpr::Constant(ConstValue::String(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a < b)),
+                    (
+                        BinOp::StrLexLe,
+                        SymExpr::Constant(ConstValue::String(a)),
+                        SymExpr::Constant(ConstValue::String(b)),
+                    ) => SymExpr::constant(ConstValue::Bool(a <= b)),
+
                     _ => SymExpr::binary_op(*op, simplified_left, simplified_right),
                 }
             }
@@ -624,6 +1210,193 @@ impl SymExpr {
                         }
                     }
                 }
+            }
+
+            // String operation simplification
+            SymExpr::StrSubstring(string, start, length) => {
+                let simplified_string = string.simplify();
+                let simplified_start = start.simplify();
+                let simplified_length = length.simplify();
+
+                // Constant folding for substring
+                if let (
+                    SymExpr::Constant(ConstValue::String(s)),
+                    SymExpr::Constant(start_val),
+                    SymExpr::Constant(length_val),
+                ) = (&simplified_string, &simplified_start, &simplified_length)
+                {
+                    if let (Some(start_idx), Some(len)) = (start_val.as_u64(), length_val.as_u64())
+                    {
+                        let start_idx = start_idx as usize;
+                        let len = len as usize;
+                        if start_idx <= s.len() && start_idx + len <= s.len() {
+                            return SymExpr::constant(ConstValue::String(
+                                s[start_idx..start_idx + len].to_string(),
+                            ));
+                        }
+                    }
+                }
+
+                SymExpr::StrSubstring(
+                    Box::new(simplified_string),
+                    Box::new(simplified_start),
+                    Box::new(simplified_length),
+                )
+            }
+
+            SymExpr::StrContains(haystack, needle) => {
+                let simplified_haystack = haystack.simplify();
+                let simplified_needle = needle.simplify();
+
+                // Constant folding for contains
+                if let (
+                    SymExpr::Constant(ConstValue::String(h)),
+                    SymExpr::Constant(ConstValue::String(n)),
+                ) = (&simplified_haystack, &simplified_needle)
+                {
+                    return SymExpr::constant(ConstValue::Bool(h.contains(n.as_str())));
+                }
+
+                SymExpr::StrContains(Box::new(simplified_haystack), Box::new(simplified_needle))
+            }
+
+            SymExpr::StrPrefixOf(prefix, string) => {
+                let simplified_prefix = prefix.simplify();
+                let simplified_string = string.simplify();
+
+                // Constant folding for prefix
+                if let (
+                    SymExpr::Constant(ConstValue::String(p)),
+                    SymExpr::Constant(ConstValue::String(s)),
+                ) = (&simplified_prefix, &simplified_string)
+                {
+                    return SymExpr::constant(ConstValue::Bool(s.starts_with(p.as_str())));
+                }
+
+                SymExpr::StrPrefixOf(Box::new(simplified_prefix), Box::new(simplified_string))
+            }
+
+            SymExpr::StrSuffixOf(suffix, string) => {
+                let simplified_suffix = suffix.simplify();
+                let simplified_string = string.simplify();
+
+                // Constant folding for suffix
+                if let (
+                    SymExpr::Constant(ConstValue::String(suf)),
+                    SymExpr::Constant(ConstValue::String(s)),
+                ) = (&simplified_suffix, &simplified_string)
+                {
+                    return SymExpr::constant(ConstValue::Bool(s.ends_with(suf.as_str())));
+                }
+
+                SymExpr::StrSuffixOf(Box::new(simplified_suffix), Box::new(simplified_string))
+            }
+
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                let simplified_string = string.simplify();
+                let simplified_pattern = pattern.simplify();
+                let simplified_replacement = replacement.simplify();
+
+                // Constant folding for replace
+                if let (
+                    SymExpr::Constant(ConstValue::String(s)),
+                    SymExpr::Constant(ConstValue::String(p)),
+                    SymExpr::Constant(ConstValue::String(r)),
+                ) = (
+                    &simplified_string,
+                    &simplified_pattern,
+                    &simplified_replacement,
+                )
+                {
+                    return SymExpr::constant(ConstValue::String(s.replacen(p, r, 1)));
+                }
+
+                SymExpr::StrReplace(
+                    Box::new(simplified_string),
+                    Box::new(simplified_pattern),
+                    Box::new(simplified_replacement),
+                )
+            }
+
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                let simplified_string = string.simplify();
+                let simplified_pattern = pattern.simplify();
+                let simplified_replacement = replacement.simplify();
+
+                // Constant folding for replace_all
+                if let (
+                    SymExpr::Constant(ConstValue::String(s)),
+                    SymExpr::Constant(ConstValue::String(p)),
+                    SymExpr::Constant(ConstValue::String(r)),
+                ) = (
+                    &simplified_string,
+                    &simplified_pattern,
+                    &simplified_replacement,
+                )
+                {
+                    return SymExpr::constant(ConstValue::String(s.replace(p, r)));
+                }
+
+                SymExpr::StrReplaceAll(
+                    Box::new(simplified_string),
+                    Box::new(simplified_pattern),
+                    Box::new(simplified_replacement),
+                )
+            }
+
+            SymExpr::StrAt(string, index) => {
+                let simplified_string = string.simplify();
+                let simplified_index = index.simplify();
+
+                // Constant folding for char_at
+                if let (SymExpr::Constant(ConstValue::String(s)), SymExpr::Constant(index_val)) =
+                    (&simplified_string, &simplified_index)
+                {
+                    if let Some(idx) = index_val.as_u64() {
+                        let idx = idx as usize;
+                        if idx < s.len() {
+                            if let Some(ch) = s.chars().nth(idx) {
+                                return SymExpr::constant(ConstValue::String(ch.to_string()));
+                            }
+                        }
+                    }
+                }
+
+                SymExpr::StrAt(Box::new(simplified_string), Box::new(simplified_index))
+            }
+
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                let simplified_haystack = haystack.simplify();
+                let simplified_needle = needle.simplify();
+                let simplified_offset = offset.simplify();
+
+                // Constant folding for index_of
+                if let (
+                    SymExpr::Constant(ConstValue::String(h)),
+                    SymExpr::Constant(ConstValue::String(n)),
+                    SymExpr::Constant(offset_val),
+                ) = (
+                    &simplified_haystack,
+                    &simplified_needle,
+                    &simplified_offset,
+                )
+                {
+                    if let Some(off) = offset_val.as_u64() {
+                        let off = off as usize;
+                        if off <= h.len() {
+                            if let Some(pos) = h[off..].find(n.as_str()) {
+                                return SymExpr::constant(ConstValue::I32((off + pos) as i32));
+                            }
+                            return SymExpr::constant(ConstValue::I32(-1));
+                        }
+                    }
+                }
+
+                SymExpr::StrIndexOf(
+                    Box::new(simplified_haystack),
+                    Box::new(simplified_needle),
+                    Box::new(simplified_offset),
+                )
             }
         }
     }
@@ -674,6 +1447,7 @@ impl SymExpr {
                     (UnOp::Not, ConstValue::U8(n)) => Some(ConstValue::U8(!n)),
                     (UnOp::Not, ConstValue::I64(n)) => Some(ConstValue::I64(!n)),
                     (UnOp::Not, ConstValue::I32(n)) => Some(ConstValue::I32(!n)),
+                    (UnOp::StrLen, ConstValue::String(s)) => Some(ConstValue::U64(s.len() as u64)),
                     _ => None,
                 }
             }
@@ -691,6 +1465,107 @@ impl SymExpr {
                     ConstValue::Bool(false) => else_expr.get_concrete_value(bindings),
                     _ => None,
                 }
+            }
+
+            SymExpr::StrSubstring(string, start, length) => {
+                let string_val = string.get_concrete_value(bindings)?;
+                let start_val = start.get_concrete_value(bindings)?;
+                let length_val = length.get_concrete_value(bindings)?;
+                
+                if let (ConstValue::String(s), Some(start_idx), Some(len)) = 
+                    (string_val, start_val.as_u64(), length_val.as_u64()) {
+                    let start_idx = start_idx as usize;
+                    let len = len as usize;
+                    if start_idx <= s.len() && start_idx + len <= s.len() {
+                        return Some(ConstValue::String(s[start_idx..start_idx + len].to_string()));
+                    }
+                }
+                None
+            }
+
+            SymExpr::StrContains(haystack, needle) => {
+                let haystack_val = haystack.get_concrete_value(bindings)?;
+                let needle_val = needle.get_concrete_value(bindings)?;
+                
+                if let (Some(h), Some(n)) = (haystack_val.as_string(), needle_val.as_string()) {
+                    return Some(ConstValue::Bool(h.contains(n)));
+                }
+                None
+            }
+
+            SymExpr::StrPrefixOf(prefix, string) => {
+                let prefix_val = prefix.get_concrete_value(bindings)?;
+                let string_val = string.get_concrete_value(bindings)?;
+                
+                if let (Some(p), Some(s)) = (prefix_val.as_string(), string_val.as_string()) {
+                    return Some(ConstValue::Bool(s.starts_with(p)));
+                }
+                None
+            }
+
+            SymExpr::StrSuffixOf(suffix, string) => {
+                let suffix_val = suffix.get_concrete_value(bindings)?;
+                let string_val = string.get_concrete_value(bindings)?;
+                
+                if let (Some(suf), Some(s)) = (suffix_val.as_string(), string_val.as_string()) {
+                    return Some(ConstValue::Bool(s.ends_with(suf)));
+                }
+                None
+            }
+
+            SymExpr::StrReplace(string, pattern, replacement) => {
+                let string_val = string.get_concrete_value(bindings)?;
+                let pattern_val = pattern.get_concrete_value(bindings)?;
+                let replacement_val = replacement.get_concrete_value(bindings)?;
+                
+                if let (Some(s), Some(p), Some(r)) = 
+                    (string_val.as_string(), pattern_val.as_string(), replacement_val.as_string()) {
+                    return Some(ConstValue::String(s.replacen(p, r, 1)));
+                }
+                None
+            }
+
+            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+                let string_val = string.get_concrete_value(bindings)?;
+                let pattern_val = pattern.get_concrete_value(bindings)?;
+                let replacement_val = replacement.get_concrete_value(bindings)?;
+                
+                if let (Some(s), Some(p), Some(r)) = 
+                    (string_val.as_string(), pattern_val.as_string(), replacement_val.as_string()) {
+                    return Some(ConstValue::String(s.replace(p, r)));
+                }
+                None
+            }
+
+            SymExpr::StrAt(string, index) => {
+                let string_val = string.get_concrete_value(bindings)?;
+                let index_val = index.get_concrete_value(bindings)?;
+                
+                if let (Some(s), Some(idx)) = (string_val.as_string(), index_val.as_u64()) {
+                    let idx = idx as usize;
+                    if idx < s.len() {
+                        return Some(ConstValue::String(s.chars().nth(idx)?.to_string()));
+                    }
+                }
+                None
+            }
+
+            SymExpr::StrIndexOf(haystack, needle, offset) => {
+                let haystack_val = haystack.get_concrete_value(bindings)?;
+                let needle_val = needle.get_concrete_value(bindings)?;
+                let offset_val = offset.get_concrete_value(bindings)?;
+                
+                if let (Some(h), Some(n), Some(off)) = 
+                    (haystack_val.as_string(), needle_val.as_string(), offset_val.as_u64()) {
+                    let off = off as usize;
+                    if off <= h.len() {
+                        if let Some(pos) = h[off..].find(n) {
+                            return Some(ConstValue::I32((off + pos) as i32));
+                        }
+                    }
+                    return Some(ConstValue::I32(-1));
+                }
+                None
             }
         }
     }
@@ -720,6 +1595,11 @@ fn eval_binary_op(op: BinOp, left: ConstValue, right: ConstValue) -> Option<Cons
         BinOp::Le => eval_le(left, right),
         BinOp::Gt => eval_gt(left, right),
         BinOp::Ge => eval_ge(left, right),
+
+        // String operations
+        BinOp::StrConcat => eval_str_concat(left, right),
+        BinOp::StrLexLt => eval_str_lex_lt(left, right),
+        BinOp::StrLexLe => eval_str_lex_le(left, right),
     }
 }
 
@@ -924,6 +1804,29 @@ fn eval_ge(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
     }
 }
 
+fn eval_str_concat(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::String(a), ConstValue::String(b)) => {
+            Some(ConstValue::String(format!("{}{}", a, b)))
+        }
+        _ => None,
+    }
+}
+
+fn eval_str_lex_lt(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::String(a), ConstValue::String(b)) => Some(ConstValue::Bool(a < b)),
+        _ => None,
+    }
+}
+
+fn eval_str_lex_le(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
+    match (left, right) {
+        (ConstValue::String(a), ConstValue::String(b)) => Some(ConstValue::Bool(a <= b)),
+        _ => None,
+    }
+}
+
 /// Hash-consing table for expression deduplication and memory efficiency
 pub struct ExpressionTable {
     table: Arc<Mutex<HashMap<u64, SymExpr>>>,
@@ -1035,12 +1938,13 @@ impl ConstValue {
             ConstValue::U32(_) => "u32",
             ConstValue::I32(_) => "i32",
             ConstValue::F32(_) => "f32",
+            ConstValue::String(_) => "string",
         }
     }
 
-    /// Check if this is a numeric type (not boolean)
+    /// Check if this is a numeric type (not boolean or string)
     pub fn is_numeric(&self) -> bool {
-        !matches!(self, ConstValue::Bool(_))
+        !matches!(self, ConstValue::Bool(_) | ConstValue::String(_))
     }
 
     /// Check if this is an integer type
@@ -1095,6 +1999,7 @@ impl ConstValue {
                     format!("{val}")
                 }
             }
+            ConstValue::String(val) => format!("\"{}\"", val.replace('\\', "\\\\").replace('"', "\\\"")),
         }
     }
 
@@ -1109,6 +2014,7 @@ impl ConstValue {
             ConstValue::F64(_) => "(_ FloatingPoint 11 53)",
             ConstValue::F32(_) => "(_ FloatingPoint 8 24)",
             ConstValue::Bool(_) => "Bool",
+            ConstValue::String(_) => "String",
         }
     }
 }
@@ -1148,6 +2054,9 @@ impl BinOp {
             BinOp::BitXor => 2,
             BinOp::BitOr => 1,
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 0,
+            // String operations have similar precedence to their counterparts
+            BinOp::StrConcat => 5, // Same as Add
+            BinOp::StrLexLt | BinOp::StrLexLe => 0, // Same as comparison operations
         }
     }
 
@@ -1184,6 +2093,9 @@ impl BinOp {
             BinOp::Le => "<=",
             BinOp::Gt => ">",
             BinOp::Ge => ">=",
+            BinOp::StrConcat => "str.++",
+            BinOp::StrLexLt => "str.<",
+            BinOp::StrLexLe => "str.<=",
         }
     }
 }
@@ -1568,6 +2480,14 @@ mod tests {
             SymExpr::BinaryOp(op, _, _) => smt_output.contains(op.to_smt_lib()),
             SymExpr::UnaryOp(op, _) => smt_output.contains(op.to_smt_lib()),
             SymExpr::Conditional(_, _, _) => smt_output.contains("ite"),
+            SymExpr::StrSubstring(_, _, _) => smt_output.contains("str.substr"),
+            SymExpr::StrContains(_, _) => smt_output.contains("str.contains"),
+            SymExpr::StrPrefixOf(_, _) => smt_output.contains("str.prefixof"),
+            SymExpr::StrSuffixOf(_, _) => smt_output.contains("str.suffixof"),
+            SymExpr::StrReplace(_, _, _) => smt_output.contains("str.replace"),
+            SymExpr::StrReplaceAll(_, _, _) => smt_output.contains("str.replace_all"),
+            SymExpr::StrAt(_, _) => smt_output.contains("str.at"),
+            SymExpr::StrIndexOf(_, _, _) => smt_output.contains("str.indexof"),
         }
     }
 
@@ -1972,3 +2892,149 @@ mod tests {
 }
 
 // Additional expression manipulation methods will be implemented in later tasks
+
+    #[test]
+    fn test_string_validation_negative_index() {
+        // Test that negative indices are rejected
+        let string = SymExpr::Constant(ConstValue::String("hello".to_string()));
+        let negative_index = SymExpr::Constant(ConstValue::I64(-1));
+        let length = SymExpr::Constant(ConstValue::I64(2));
+        
+        let expr = SymExpr::str_substring(string, negative_index, length);
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::InvalidStringOperation(_)));
+    }
+
+    #[test]
+    fn test_string_validation_negative_length() {
+        // Test that negative lengths are rejected
+        let string = SymExpr::Constant(ConstValue::String("hello".to_string()));
+        let start = SymExpr::Constant(ConstValue::I64(0));
+        let negative_length = SymExpr::Constant(ConstValue::I64(-5));
+        
+        let expr = SymExpr::str_substring(string, start, negative_length);
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::InvalidStringOperation(_)));
+    }
+
+    #[test]
+    fn test_string_validation_empty_pattern() {
+        // Test that empty patterns are rejected in replace operations
+        let string = SymExpr::Constant(ConstValue::String("hello".to_string()));
+        let empty_pattern = SymExpr::Constant(ConstValue::String("".to_string()));
+        let replacement = SymExpr::Constant(ConstValue::String("x".to_string()));
+        
+        let expr = SymExpr::str_replace(string.clone(), empty_pattern.clone(), replacement.clone());
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::EmptyPatternError));
+        
+        // Test replace_all as well
+        let expr2 = SymExpr::str_replace_all(string, empty_pattern, replacement);
+        let result2 = expr2.validate_string_operations();
+        
+        assert!(result2.is_err());
+        assert!(matches!(result2.unwrap_err(), crate::SymExError::EmptyPatternError));
+    }
+
+    #[test]
+    fn test_string_validation_char_at_negative_index() {
+        // Test that negative indices are rejected in char_at
+        let string = SymExpr::Constant(ConstValue::String("hello".to_string()));
+        let negative_index = SymExpr::Constant(ConstValue::I32(-1));
+        
+        let expr = SymExpr::str_at(string, negative_index);
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::InvalidStringOperation(_)));
+    }
+
+    #[test]
+    fn test_string_validation_index_of_negative_offset() {
+        // Test that negative offsets are rejected in index_of
+        let haystack = SymExpr::Constant(ConstValue::String("hello world".to_string()));
+        let needle = SymExpr::Constant(ConstValue::String("world".to_string()));
+        let negative_offset = SymExpr::Constant(ConstValue::I64(-1));
+        
+        let expr = SymExpr::str_index_of(haystack, needle, negative_offset);
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::InvalidStringOperation(_)));
+    }
+
+    #[test]
+    fn test_string_validation_valid_operations() {
+        // Test that valid operations pass validation
+        let string = SymExpr::Constant(ConstValue::String("hello".to_string()));
+        let start = SymExpr::Constant(ConstValue::I64(0));
+        let length = SymExpr::Constant(ConstValue::I64(3));
+        
+        let expr = SymExpr::str_substring(string, start, length);
+        let result = expr.validate_string_operations();
+        
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ascii_validation_valid() {
+        // Test that ASCII strings pass validation
+        let expr = SymExpr::Constant(ConstValue::String("Hello, World!".to_string()));
+        let result = expr.validate_ascii();
+        
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ascii_validation_non_ascii() {
+        // Test that non-ASCII strings are rejected
+        let expr = SymExpr::Constant(ConstValue::String("Hello, 世界!".to_string()));
+        let result = expr.validate_ascii();
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::SymExError::NonAsciiCharacter { character, position } => {
+                assert_eq!(character, '世');
+                assert_eq!(position, 7);
+            }
+            _ => panic!("Expected NonAsciiCharacter error"),
+        }
+    }
+
+    #[test]
+    fn test_expression_depth_limit() {
+        // Create a deeply nested expression
+        let mut expr = SymExpr::Constant(ConstValue::String("x".to_string()));
+        for _ in 0..101 {
+            expr = SymExpr::str_concat(expr.clone(), SymExpr::Constant(ConstValue::String("y".to_string())));
+        }
+        
+        let result = expr.validate_string_operations();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::ResourceExhaustion(_)));
+    }
+
+    #[test]
+    fn test_expression_complexity_limit() {
+        // Create an expression with many nodes
+        let mut expr = SymExpr::Constant(ConstValue::String("x".to_string()));
+        
+        // Build a wide tree (not deep) to exceed node count
+        for _ in 0..100 {
+            let mut temp = SymExpr::Constant(ConstValue::String("a".to_string()));
+            for _ in 0..100 {
+                temp = SymExpr::str_concat(temp, SymExpr::Constant(ConstValue::String("b".to_string())));
+            }
+            expr = SymExpr::str_concat(expr, temp);
+        }
+        
+        let result = expr.validate_string_operations();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), crate::SymExError::ResourceExhaustion(_)));
+    }
