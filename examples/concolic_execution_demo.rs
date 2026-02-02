@@ -4,7 +4,7 @@
 //! expressions to enable fast satisfiability checking without calling the
 //! SMT solver for every path.
 
-use rust_project::{SymExManager, SymExResult, solver::Z3Solver, symbolic_types::SymU64};
+use rust_project::{solver::Z3Solver, symbolic_types::SymU64, SymExManager, SymExResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -19,8 +19,8 @@ fn main() -> SymExResult<()> {
     println!("   This enables concolic (concrete + symbolic) execution\n");
 
     // Create symbolic variables with initial concrete values
-    let x = SymU64::from_concrete(10, Arc::clone(&manager));
-    let y = SymU64::from_concrete(20, Arc::clone(&manager));
+    let x = SymU64::from_concrete_in(10, Arc::clone(&manager));
+    let y = SymU64::from_concrete_in(20, Arc::clone(&manager));
 
     println!("   x = 10 (symbolic: {})", x.variable_name());
     println!("   y = 20 (symbolic: {})", y.variable_name());
@@ -94,10 +94,10 @@ fn main() -> SymExResult<()> {
     }
 
     // Create a fresh symbolic variable (without concrete value initially)
-    let mut z = SymU64::new(Arc::clone(&manager));
+    let z = SymU64::new_in(Arc::clone(&manager));
 
     // Create a constant for comparison
-    let fifteen = SymU64::from_concrete(15, Arc::clone(&manager));
+    let fifteen = SymU64::from_concrete_in(15, Arc::clone(&manager));
 
     // Add constraint: z > 15
     let new_constraint = z.gt_constraint(&fifteen);

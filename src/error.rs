@@ -66,6 +66,10 @@ pub enum SymExError {
     Generic(String),
     /// I/O related errors
     IoError(String),
+    /// Early UNSAT detection panic
+    UnsatPanic,
+    /// User function execution error
+    ExecutionError(String),
 }
 
 impl fmt::Display for SymExError {
@@ -154,6 +158,12 @@ impl fmt::Display for SymExError {
             }
             SymExError::IoError(msg) => {
                 write!(f, "I/O error: {msg}")
+            }
+            SymExError::UnsatPanic => {
+                write!(f, "Early UNSAT detection")
+            }
+            SymExError::ExecutionError(msg) => {
+                write!(f, "Execution error: {msg}")
             }
         }
     }

@@ -2,9 +2,9 @@
 
 #[cfg(test)]
 mod dependency_tests {
-    use quickcheck::{TestResult, quickcheck};
+    use quickcheck::{quickcheck, TestResult};
     use quickcheck_macros::quickcheck as qc;
-    use z3::{Context, Solver, ast::Int};
+    use z3::{ast::Int, Context, Solver};
 
     #[test]
     fn test_z3_basic_functionality() {

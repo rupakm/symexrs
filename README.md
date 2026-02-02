@@ -6,7 +6,7 @@ A symbolic execution tool that uses Rust traits to enable seamless switching bet
 
 - **Trait-based symbolic types**: Drop-in replacements for concrete types (SymU64, SymI32, etc.)
 - **SMT solver integration**: Uses Z3 for constraint satisfiability and model generation
-- **Path exploration**: Backtracking stack for systematic exploration of execution paths
+- **Replay-based path exploration**: Re-executes the closure with forced branch decisions; undecided branches follow concolic execution and record alternatives
 - **Property-based testing**: Comprehensive testing using QuickCheck
 
 ## Prerequisites
@@ -48,15 +48,17 @@ cargo test
 
 ## Project Structure
 
-- `src/symbolic_types.rs` - Symbolic numeric types with trait implementations
+- `src/symbolic_types.rs` - Drop-in symbolic types (ints/bool/string)
 - `src/expressions.rs` - Abstract syntax tree for symbolic expressions
-- `src/manager.rs` - Global symbolic execution context management
+- `src/runtime.rs` - Per-run runtime state (decisions + concolic inputs)
+- `src/engine.rs` - Exploration engine and scheduling primitives
+- `src/manager.rs` - Constraint/variable manager + solver integration helpers
 - `src/solver.rs` - SMT solver interface and Z3 integration
 - `src/error.rs` - Comprehensive error handling
 
 ## Development Status
 
-This project is currently in development. The basic project structure and dependencies have been set up. Individual components will be implemented in subsequent development phases.
+This project is under active development. The current focus is making the execution/runtime architecture ergonomic and schedulable.
 
 ## License
 

@@ -8,8 +8,8 @@ use crate::error::{SymExError, SymExResult};
 use crate::expressions::{BinOp, ConstValue, SymExpr, UnOp};
 use std::collections::HashMap;
 use z3::{
-    Config, Context, SatResult as Z3SatResult, Solver,
     ast::{Ast, Bool, Int},
+    Config, Context, SatResult as Z3SatResult, Solver,
 };
 
 /// Result of a satisfiability query
@@ -199,6 +199,8 @@ pub trait SmtSolver {
 pub struct Z3Solver {
     config: Config,
     context: Context,
+    // Timeout in milliseconds for solver operations
+    timeout_ms: Option<u32>,
     // Track the current assertion level for push/pop operations
     assertion_level: usize,
     // Track asserted constraints for state management
@@ -212,8 +214,18 @@ pub struct Z3Solver {
 impl Z3Solver {
     /// Create a new Z3 solver instance
     pub fn new() -> SymExResult<Self> {
+        Self::with_timeout(None)
+    }
+
+    /// Create a new Z3 solver instance with optional timeout
+    pub fn with_timeout(timeout_ms: Option<u32>) -> SymExResult<Self> {
         // Try to create Z3 configuration
-        let config = Config::new();
+        let mut config = Config::new();
+
+        // Configure timeout if provided
+        if let Some(timeout) = timeout_ms {
+            config.set_timeout_msec(timeout as u64);
+        }
 
         // Try to create Z3 context
         let context = Context::new(&config);
@@ -243,11 +255,33 @@ impl Z3Solver {
         Ok(Self {
             config,
             context,
+            timeout_ms,
             assertion_level: 0,
             asserted_constraints: Vec::new(),
             constraint_stack: Vec::new(),
             last_checked_constraints: Vec::new(),
         })
+    }
+
+    /// Set the timeout for solver operations
+    pub fn set_timeout(&mut self, timeout_ms: Option<u32>) -> SymExResult<()> {
+        self.timeout_ms = timeout_ms;
+
+        // Recreate config and context with new timeout
+        let mut config = Config::new();
+        if let Some(timeout) = timeout_ms {
+            config.set_timeout_msec(timeout as u64);
+        }
+
+        self.config = config;
+        self.context = Context::new(&self.config);
+
+        Ok(())
+    }
+
+    /// Get the current timeout setting
+    pub fn get_timeout(&self) -> Option<u32> {
+        self.timeout_ms
     }
 
     /// Check if Z3 string theory is available
@@ -258,26 +292,28 @@ impl Z3Solver {
     pub fn check_string_theory_support(&self) -> SymExResult<()> {
         // Try to create a simple string constraint to verify string theory support
         let test_solver = Solver::new(&self.context);
-        
+
         // Attempt to create a string variable and a simple constraint
         let test_str = z3::ast::String::new_const(&self.context, "test_string");
-        let empty_str = z3::ast::String::from_str(&self.context, "").unwrap();
+        let empty_str = z3::ast::String::from_str(&self.context, "").map_err(|_| {
+            SymExError::SolverError(
+                "Failed to create empty string literal for string theory test".to_string(),
+            )
+        })?;
         let test_constraint = test_str._eq(&empty_str);
-        
+
         // Try to assert the constraint
         test_solver.assert(&test_constraint);
-        
+
         // Check if the solver can handle it
         match test_solver.check() {
             Z3SatResult::Sat | Z3SatResult::Unsat => {
                 // String theory is supported
                 Ok(())
             }
-            Z3SatResult::Unknown => {
-                Err(SymExError::SolverError(
-                    "Z3 string theory is not available or not properly configured".to_string()
-                ))
-            }
+            Z3SatResult::Unknown => Err(SymExError::SolverError(
+                "Z3 string theory is not available or not properly configured".to_string(),
+            )),
         }
     }
 
@@ -294,7 +330,7 @@ impl Z3Solver {
         // Z3's Rust bindings automatically detect the required logic based on
         // the constraints asserted. We verify that string theory is available.
         self.check_string_theory_support()?;
-        
+
         // If we reach here, string theory is supported
         // Z3 will automatically use QF_S or QF_SLIA as needed
         Ok(())
@@ -305,10 +341,12 @@ impl Z3Solver {
     /// We create solvers on-demand rather than storing them because
     /// Z3 solvers have lifetime constraints tied to the context.
     fn get_solver(&self) -> Solver {
-        // Note: Z3 Rust bindings don't expose set_timeout directly
-        // Timeout handling would need to be implemented at a higher level
+        let solver = Solver::new(&self.context);
 
-        Solver::new(&self.context)
+        // Configure timeout if set - timeout is configured at the context level
+        // The solver inherits timeout settings from the context
+
+        solver
     }
 
     /// Check if a single constraint is satisfiable
@@ -397,12 +435,8 @@ impl Z3Solver {
                 SymExpr::StrContains(haystack, needle) => {
                     has_content(haystack) || has_content(needle)
                 }
-                SymExpr::StrPrefixOf(prefix, string) => {
-                    has_content(prefix) || has_content(string)
-                }
-                SymExpr::StrSuffixOf(suffix, string) => {
-                    has_content(suffix) || has_content(string)
-                }
+                SymExpr::StrPrefixOf(prefix, string) => has_content(prefix) || has_content(string),
+                SymExpr::StrSuffixOf(suffix, string) => has_content(suffix) || has_content(string),
                 SymExpr::StrReplace(string, pattern, replacement) => {
                     has_content(string) || has_content(pattern) || has_content(replacement)
                 }
@@ -482,14 +516,10 @@ impl Z3Solver {
     /// This method attempts to extract the string value assigned to a variable
     /// in the given Z3 model. Returns None if the variable is not found or
     /// cannot be evaluated as a string.
-    fn extract_string_from_model(
-        &self,
-        z3_model: &z3::Model,
-        var_name: &str,
-    ) -> Option<String> {
+    fn extract_string_from_model(&self, z3_model: &z3::Model, var_name: &str) -> Option<String> {
         // Create a Z3 string constant for the variable
         let string_var = z3::ast::String::new_const(&self.context, var_name);
-        
+
         // Try to evaluate the variable in the model
         if let Some(value_ast) = z3_model.eval(&string_var, true) {
             // Try to convert the Z3 AST to a string
@@ -498,7 +528,7 @@ impl Z3Solver {
                 return Some(string_val.to_string());
             }
         }
-        
+
         None
     }
 
@@ -534,12 +564,13 @@ impl Z3Solver {
                     BinOp::Eq | BinOp::Ne => {
                         // Equality - infer type from the other operand
                         match (left.as_ref(), right.as_ref()) {
-                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::String(_))) |
-                            (SymExpr::Constant(ConstValue::String(_)), SymExpr::Variable(name)) => {
+                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::String(_)))
+                            | (SymExpr::Constant(ConstValue::String(_)), SymExpr::Variable(name)) =>
+                            {
                                 types.insert(name.clone(), "string");
                             }
-                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::Bool(_))) |
-                            (SymExpr::Constant(ConstValue::Bool(_)), SymExpr::Variable(name)) => {
+                            (SymExpr::Variable(name), SymExpr::Constant(ConstValue::Bool(_)))
+                            | (SymExpr::Constant(ConstValue::Bool(_)), SymExpr::Variable(name)) => {
                                 types.insert(name.clone(), "bool");
                             }
                             _ => {}
@@ -558,7 +589,7 @@ impl Z3Solver {
                         // Other operations - assume integer
                     }
                 }
-                
+
                 // Recursively infer types from sub-expressions
                 self.infer_variable_types(left, types);
                 self.infer_variable_types(right, types);
@@ -579,7 +610,7 @@ impl Z3Solver {
                     }
                     _ => {}
                 }
-                
+
                 self.infer_variable_types(operand, types);
             }
             SymExpr::Conditional(cond, then_expr, else_expr) => {
@@ -595,9 +626,9 @@ impl Z3Solver {
                 self.infer_variable_types(start, types);
                 self.infer_variable_types(length, types);
             }
-            SymExpr::StrContains(haystack, needle) |
-            SymExpr::StrPrefixOf(haystack, needle) |
-            SymExpr::StrSuffixOf(haystack, needle) => {
+            SymExpr::StrContains(haystack, needle)
+            | SymExpr::StrPrefixOf(haystack, needle)
+            | SymExpr::StrSuffixOf(haystack, needle) => {
                 if let SymExpr::Variable(name) = haystack.as_ref() {
                     types.insert(name.clone(), "string");
                 }
@@ -607,8 +638,8 @@ impl Z3Solver {
                 self.infer_variable_types(haystack, types);
                 self.infer_variable_types(needle, types);
             }
-            SymExpr::StrReplace(string, pattern, replacement) |
-            SymExpr::StrReplaceAll(string, pattern, replacement) => {
+            SymExpr::StrReplace(string, pattern, replacement)
+            | SymExpr::StrReplaceAll(string, pattern, replacement) => {
                 if let SymExpr::Variable(name) = string.as_ref() {
                     types.insert(name.clone(), "string");
                 }
@@ -656,7 +687,7 @@ impl Z3Solver {
 
                 // Collect all variables from constraints
                 let all_variables = self.get_constraint_variables(constraints);
-                
+
                 // Infer variable types from constraints
                 let mut variable_types: HashMap<String, &str> = HashMap::new();
                 for constraint in constraints {
@@ -678,61 +709,89 @@ impl Z3Solver {
 
                                 // Try to extract each variable using inferred type information
                                 for var_name in &all_variables {
-                                    let inferred_type = variable_types.get(var_name.as_str()).copied();
-                                    
+                                    let inferred_type =
+                                        variable_types.get(var_name.as_str()).copied();
+
                                     match inferred_type {
                                         Some("string") => {
                                             // Try as string
-                                            if let Some(string_val) = self.extract_string_from_model(&z3_model, var_name) {
-                                                assignments.insert(var_name.clone(), ConstValue::String(string_val));
+                                            if let Some(string_val) =
+                                                self.extract_string_from_model(&z3_model, var_name)
+                                            {
+                                                assignments.insert(
+                                                    var_name.clone(),
+                                                    ConstValue::String(string_val),
+                                                );
                                                 continue;
                                             }
                                         }
                                         Some("bool") => {
                                             // Try as boolean
-                                            let bool_var = Bool::new_const(&self.context, var_name.as_str());
-                                            if let Some(value_ast) = z3_model.eval(&bool_var, true) {
+                                            let bool_var =
+                                                Bool::new_const(&self.context, var_name.as_str());
+                                            if let Some(value_ast) = z3_model.eval(&bool_var, true)
+                                            {
                                                 if let Some(bool_val) = value_ast.as_bool() {
-                                                    assignments.insert(var_name.clone(), ConstValue::Bool(bool_val));
+                                                    assignments.insert(
+                                                        var_name.clone(),
+                                                        ConstValue::Bool(bool_val),
+                                                    );
                                                     continue;
                                                 }
                                             }
                                         }
                                         _ => {
                                             // Default to integer
-                                            let int_var = Int::new_const(&self.context, var_name.as_str());
+                                            let int_var =
+                                                Int::new_const(&self.context, var_name.as_str());
                                             if let Some(value_ast) = z3_model.eval(&int_var, true) {
                                                 if let Some(int_val) = value_ast.as_i64() {
-                                                    assignments.insert(var_name.clone(), ConstValue::I64(int_val));
+                                                    assignments.insert(
+                                                        var_name.clone(),
+                                                        ConstValue::I64(int_val),
+                                                    );
                                                     continue;
                                                 }
                                             }
                                         }
                                     }
-                                    
+
                                     // Fallback: try all types if inferred type didn't work
                                     if !assignments.contains_key(var_name) {
                                         // Try as integer
-                                        let int_var = Int::new_const(&self.context, var_name.as_str());
+                                        let int_var =
+                                            Int::new_const(&self.context, var_name.as_str());
                                         if let Some(value_ast) = z3_model.eval(&int_var, true) {
                                             if let Some(int_val) = value_ast.as_i64() {
-                                                assignments.insert(var_name.clone(), ConstValue::I64(int_val));
+                                                assignments.insert(
+                                                    var_name.clone(),
+                                                    ConstValue::I64(int_val),
+                                                );
                                                 continue;
                                             }
                                         }
 
                                         // Try as boolean
-                                        let bool_var = Bool::new_const(&self.context, var_name.as_str());
+                                        let bool_var =
+                                            Bool::new_const(&self.context, var_name.as_str());
                                         if let Some(value_ast) = z3_model.eval(&bool_var, true) {
                                             if let Some(bool_val) = value_ast.as_bool() {
-                                                assignments.insert(var_name.clone(), ConstValue::Bool(bool_val));
+                                                assignments.insert(
+                                                    var_name.clone(),
+                                                    ConstValue::Bool(bool_val),
+                                                );
                                                 continue;
                                             }
                                         }
 
                                         // Try as string
-                                        if let Some(string_val) = self.extract_string_from_model(&z3_model, var_name) {
-                                            assignments.insert(var_name.clone(), ConstValue::String(string_val));
+                                        if let Some(string_val) =
+                                            self.extract_string_from_model(&z3_model, var_name)
+                                        {
+                                            assignments.insert(
+                                                var_name.clone(),
+                                                ConstValue::String(string_val),
+                                            );
                                         }
                                     }
                                 }
@@ -878,9 +937,10 @@ impl Z3Solver {
                         // String length operation
                         // This operation is not directly exposed in the z3 Rust bindings
                         let _string_ast = self.symexpr_to_z3_string(operand)?;
-                        
+
                         Err(SymExError::SolverError(
-                            "String length operation not yet fully implemented in Z3 Rust bindings".to_string()
+                            "String length operation not yet fully implemented in Z3 Rust bindings"
+                                .to_string(),
                         ))
                     }
                     _ => Err(SymExError::SolverError(format!(
@@ -902,9 +962,10 @@ impl Z3Solver {
                 let _haystack_str = self.symexpr_to_z3_string(haystack)?;
                 let _needle_str = self.symexpr_to_z3_string(needle)?;
                 let _offset_int = self.symexpr_to_z3_int(offset)?;
-                
+
                 Err(SymExError::SolverError(
-                    "String index_of operation not yet fully implemented in Z3 Rust bindings".to_string()
+                    "String index_of operation not yet fully implemented in Z3 Rust bindings"
+                        .to_string(),
                 ))
             }
 
@@ -947,21 +1008,23 @@ impl Z3Solver {
 
             SymExpr::Constant(ConstValue::String(s)) => {
                 // Convert Rust string to Z3 string literal
-                z3::ast::String::from_str(&self.context, s.as_str())
-                    .map_err(|e| {
-                        SymExError::SolverError(format!(
-                            "Failed to create Z3 string literal from '{s}': {e}"
-                        ))
-                    })
+                z3::ast::String::from_str(&self.context, s.as_str()).map_err(|_| {
+                    SymExError::SolverError(format!(
+                        "Failed to create Z3 string literal from '{s}'"
+                    ))
+                })
             }
 
             SymExpr::BinaryOp(BinOp::StrConcat, left, right) => {
                 // String concatenation using Z3's seq.concat
                 let left_str = self.symexpr_to_z3_string(left)?;
                 let right_str = self.symexpr_to_z3_string(right)?;
-                
+
                 // Use the concat static method from z3 crate
-                Ok(z3::ast::String::concat(&self.context, &[&left_str, &right_str]))
+                Ok(z3::ast::String::concat(
+                    &self.context,
+                    &[&left_str, &right_str],
+                ))
             }
 
             SymExpr::StrSubstring(string, start, length) => {
@@ -972,9 +1035,10 @@ impl Z3Solver {
                 let _str_ast = self.symexpr_to_z3_string(string)?;
                 let _start_ast = self.symexpr_to_z3_int(start)?;
                 let _length_ast = self.symexpr_to_z3_int(length)?;
-                
+
                 Err(SymExError::SolverError(
-                    "String substring operation not yet fully implemented in Z3 Rust bindings".to_string()
+                    "String substring operation not yet fully implemented in Z3 Rust bindings"
+                        .to_string(),
                 ))
             }
 
@@ -984,9 +1048,10 @@ impl Z3Solver {
                 let _str_ast = self.symexpr_to_z3_string(string)?;
                 let _pattern_ast = self.symexpr_to_z3_string(pattern)?;
                 let _replacement_ast = self.symexpr_to_z3_string(replacement)?;
-                
+
                 Err(SymExError::SolverError(
-                    "String replace operation not yet fully implemented in Z3 Rust bindings".to_string()
+                    "String replace operation not yet fully implemented in Z3 Rust bindings"
+                        .to_string(),
                 ))
             }
 
@@ -995,9 +1060,10 @@ impl Z3Solver {
                 let _str_ast = self.symexpr_to_z3_string(string)?;
                 let _pattern_ast = self.symexpr_to_z3_string(pattern)?;
                 let _replacement_ast = self.symexpr_to_z3_string(replacement)?;
-                
+
                 Err(SymExError::SolverError(
-                    "String replace_all operation not yet fully implemented in Z3 Rust bindings".to_string()
+                    "String replace_all operation not yet fully implemented in Z3 Rust bindings"
+                        .to_string(),
                 ))
             }
 
@@ -1005,9 +1071,10 @@ impl Z3Solver {
                 // Character at index using Z3's seq.at
                 let _str_ast = self.symexpr_to_z3_string(string)?;
                 let _index_ast = self.symexpr_to_z3_int(index)?;
-                
+
                 Err(SymExError::SolverError(
-                    "String char_at operation not yet fully implemented in Z3 Rust bindings".to_string()
+                    "String char_at operation not yet fully implemented in Z3 Rust bindings"
+                        .to_string(),
                 ))
             }
 
@@ -1121,7 +1188,8 @@ impl Z3Solver {
                                     ))
                                 } else {
                                     Err(SymExError::SolverError(
-                                        "Type mismatch in less-than-or-equal comparison".to_string(),
+                                        "Type mismatch in less-than-or-equal comparison"
+                                            .to_string(),
                                     ))
                                 }
                             }
@@ -1173,7 +1241,8 @@ impl Z3Solver {
                                     ))
                                 } else {
                                     Err(SymExError::SolverError(
-                                        "Type mismatch in greater-than-or-equal comparison".to_string(),
+                                        "Type mismatch in greater-than-or-equal comparison"
+                                            .to_string(),
                                     ))
                                 }
                             }
@@ -1222,7 +1291,7 @@ impl Z3Solver {
             SymExpr::StrContains(haystack, needle) => {
                 let haystack_str = self.symexpr_to_z3_string(haystack)?;
                 let needle_str = self.symexpr_to_z3_string(needle)?;
-                
+
                 // Use the contains method from z3 crate
                 Ok(haystack_str.contains(&needle_str))
             }
@@ -1230,7 +1299,7 @@ impl Z3Solver {
             SymExpr::StrPrefixOf(prefix, string) => {
                 let prefix_str = self.symexpr_to_z3_string(prefix)?;
                 let string_str = self.symexpr_to_z3_string(string)?;
-                
+
                 // Use the prefix method from z3 crate
                 Ok(prefix_str.prefix(&string_str))
             }
@@ -1238,7 +1307,7 @@ impl Z3Solver {
             SymExpr::StrSuffixOf(suffix, string) => {
                 let suffix_str = self.symexpr_to_z3_string(suffix)?;
                 let string_str = self.symexpr_to_z3_string(string)?;
-                
+
                 // Use the suffix method from z3 crate
                 Ok(suffix_str.suffix(&string_str))
             }
@@ -1254,7 +1323,7 @@ impl SmtSolver for Z3Solver {
     fn check_sat(&mut self, constraints: &[SymExpr]) -> SymExResult<SatResult> {
         // Store the constraints for later use by get_model
         self.last_checked_constraints = constraints.to_vec();
-        
+
         // Validate all constraints first
         for (i, constraint) in constraints.iter().enumerate() {
             if let Err(e) = self.validate_constraint(constraint) {
@@ -1302,7 +1371,7 @@ impl SmtSolver for Z3Solver {
         // This combines both asserted constraints and the constraints from the last check_sat call
         let mut all_constraints = self.asserted_constraints.clone();
         all_constraints.extend(self.last_checked_constraints.clone());
-        
+
         self.get_model_for_constraints(&all_constraints)
     }
 
@@ -1361,8 +1430,13 @@ impl SmtSolver for Z3Solver {
     }
 
     fn reset(&mut self) -> SymExResult<()> {
-        // Create a new context and config to reset state
-        self.config = Config::new();
+        // Create a new context and config to reset state, preserving timeout
+        let mut config = Config::new();
+        if let Some(timeout) = self.timeout_ms {
+            config.set_timeout_msec(timeout as u64);
+        }
+
+        self.config = config;
         self.context = Context::new(&self.config);
 
         // Clear all state
@@ -2566,6 +2640,50 @@ mod tests {
         let result = solver.check_sat(&constraints);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), SatResult::Sat);
+    }
+
+    #[test]
+    fn test_timeout_configuration() {
+        // Test creating solver without timeout
+        let solver = Z3Solver::new();
+        assert!(solver.is_ok());
+        let solver = solver.unwrap();
+        assert_eq!(solver.get_timeout(), None);
+
+        // Test creating solver with timeout
+        let solver_with_timeout = Z3Solver::with_timeout(Some(5000));
+        assert!(solver_with_timeout.is_ok());
+        let solver_with_timeout = solver_with_timeout.unwrap();
+        assert_eq!(solver_with_timeout.get_timeout(), Some(5000));
+    }
+
+    #[test]
+    fn test_set_timeout() {
+        let mut solver = Z3Solver::new().unwrap();
+
+        // Initially no timeout
+        assert_eq!(solver.get_timeout(), None);
+
+        // Set timeout
+        let result = solver.set_timeout(Some(3000));
+        assert!(result.is_ok());
+        assert_eq!(solver.get_timeout(), Some(3000));
+
+        // Clear timeout
+        let result = solver.set_timeout(None);
+        assert!(result.is_ok());
+        assert_eq!(solver.get_timeout(), None);
+    }
+
+    #[test]
+    fn test_timeout_preserved_after_reset() {
+        let mut solver = Z3Solver::with_timeout(Some(2000)).unwrap();
+        assert_eq!(solver.get_timeout(), Some(2000));
+
+        // Reset should preserve timeout
+        let result = solver.reset();
+        assert!(result.is_ok());
+        assert_eq!(solver.get_timeout(), Some(2000));
     }
 
     #[test]

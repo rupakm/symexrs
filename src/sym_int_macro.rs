@@ -35,15 +35,21 @@ macro_rules! define_sym_int {
             variable_name: String,
             /// Symbolic expression representing this value
             expr: $crate::expressions::SymExpr,
-            /// Optional concrete value for concolic execution
-            concrete_value: Option<$concrete_type>,
+            /// Optional concrete value for concolic execution (using Cell for interior mutability)
+            concrete_value: std::cell::Cell<Option<$concrete_type>>,
             /// Reference to the global symbolic execution manager
             manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
         }
 
         impl $sym_type {
-            /// Create a new symbolic value with a fresh variable name
-            pub fn new(
+            /// Create a new symbolic value in the current runtime.
+            pub fn new() -> Self {
+                let manager = $crate::get_global_manager().expect("Failed to get global manager");
+                Self::new_in(manager)
+            }
+
+            /// Create a new symbolic value with a fresh variable name (advanced).
+            pub fn new_in(
                 manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
             ) -> Self {
                 let variable_name = {
@@ -64,22 +70,36 @@ macro_rules! define_sym_int {
                     let _ = mgr.register_variable(variable_name.clone(), type_info);
                 }
 
+                $crate::runtime::with_current_runtime(|rt| {
+                    if let Some(rt) = rt {
+                        rt.set_concolic_value(
+                            variable_name.clone(),
+                            $crate::expressions::ConstValue::$const_variant(0 as $concrete_type),
+                        );
+                    }
+                });
+
                 Self {
                     variable_name,
                     expr,
-                    concrete_value: Some(0 as $concrete_type),
+                    concrete_value: std::cell::Cell::new(Some(0 as $concrete_type)),
                     manager,
                 }
             }
 
-            /// Create a new symbolic value using the global thread-local manager
+            /// Alias for `new()`.
             pub fn new_global() -> Self {
-                let manager = $crate::get_global_manager().expect("Failed to get global manager");
-                Self::new(manager)
+                Self::new()
             }
 
-            /// Create a new symbolic value with a specific variable name
-            pub fn with_name(
+            /// Create a new symbolic value with a specific variable name in the current runtime.
+            pub fn with_name(name: String) -> Self {
+                let manager = $crate::get_global_manager().expect("Failed to get global manager");
+                Self::with_name_in(name, manager)
+            }
+
+            /// Create a new symbolic value with a specific variable name (advanced).
+            pub fn with_name_in(
                 name: String,
                 manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
             ) -> Self {
@@ -97,10 +117,19 @@ macro_rules! define_sym_int {
                     let _ = mgr.register_variable(name.clone(), type_info);
                 }
 
+                $crate::runtime::with_current_runtime(|rt| {
+                    if let Some(rt) = rt {
+                        rt.set_concolic_value(
+                            name.clone(),
+                            $crate::expressions::ConstValue::$const_variant(0 as $concrete_type),
+                        );
+                    }
+                });
+
                 Self {
                     variable_name: name,
                     expr,
-                    concrete_value: Some(0 as $concrete_type),
+                    concrete_value: std::cell::Cell::new(Some(0 as $concrete_type)),
                     manager,
                 }
             }
@@ -109,7 +138,13 @@ macro_rules! define_sym_int {
             ///
             /// This is useful for concolic execution where you want to track a value
             /// symbolically but also maintain a concrete value for fast path checking.
-            pub fn with_value(
+            /// The concrete value is just a hint and does not constrain the symbolic variable.
+            pub fn with_value(value: $concrete_type) -> Self {
+                let manager = $crate::get_global_manager().expect("Failed to get global manager");
+                Self::with_value_in(value, manager)
+            }
+
+            pub fn with_value_in(
                 value: $concrete_type,
                 manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
             ) -> Self {
@@ -128,16 +163,30 @@ macro_rules! define_sym_int {
 
                 let expr = $crate::expressions::SymExpr::Variable(variable_name.clone());
 
+                $crate::runtime::with_current_runtime(|rt| {
+                    if let Some(rt) = rt {
+                        rt.set_concolic_value(
+                            variable_name.clone(),
+                            $crate::expressions::ConstValue::$const_variant(value),
+                        );
+                    }
+                });
+
                 Self {
                     variable_name,
                     expr,
-                    concrete_value: Some(value),
+                    concrete_value: std::cell::Cell::new(Some(value)),
                     manager,
                 }
             }
 
             /// Create a symbolic value from a concrete value
-            pub fn from_concrete(
+            pub fn from_concrete(value: $concrete_type) -> Self {
+                let manager = $crate::get_global_manager().expect("Failed to get global manager");
+                Self::from_concrete_in(value, manager)
+            }
+
+            pub fn from_concrete_in(
                 value: $concrete_type,
                 manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
             ) -> Self {
@@ -153,13 +202,18 @@ macro_rules! define_sym_int {
                 Self {
                     variable_name,
                     expr,
-                    concrete_value: Some(value),
+                    concrete_value: std::cell::Cell::new(Some(value)),
                     manager,
                 }
             }
 
             /// Create a symbolic value from an existing expression
-            pub fn from_expr(
+            pub fn from_expr(expr: $crate::expressions::SymExpr) -> Self {
+                let manager = $crate::get_global_manager().expect("Failed to get global manager");
+                Self::from_expr_in(expr, manager)
+            }
+
+            pub fn from_expr_in(
                 expr: $crate::expressions::SymExpr,
                 manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
             ) -> Self {
@@ -189,7 +243,7 @@ macro_rules! define_sym_int {
                 Self {
                     variable_name,
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager,
                 }
             }
@@ -206,19 +260,39 @@ macro_rules! define_sym_int {
 
             /// Get the concrete value if available
             pub fn concrete_value(&self) -> Option<$concrete_type> {
-                self.concrete_value
+                if $crate::runtime::is_exploring() {
+                    if let Some(cv) = $crate::runtime::concolic_value_for(&self.variable_name) {
+                        return match stringify!($const_variant) {
+                            "U64" => cv.as_u64().map(|v| v as $concrete_type),
+                            "I64" => cv.as_i64().map(|v| v as $concrete_type),
+                            "U32" => cv.as_u32().map(|v| v as $concrete_type),
+                            "I32" => cv.as_i32().map(|v| v as $concrete_type),
+                            "U8" => cv.as_u8().map(|v| v as $concrete_type),
+                            _ => None,
+                        };
+                    }
+                }
+                self.concrete_value.get()
             }
 
             /// Set the concrete value (for concolic execution updates)
-            pub fn set_concrete_value(&mut self, value: $concrete_type) {
-                self.concrete_value = Some(value);
+            pub fn set_concrete_value(&self, value: $concrete_type) {
+                self.concrete_value.set(Some(value));
+                $crate::runtime::with_current_runtime(|rt| {
+                    if let Some(rt) = rt {
+                        rt.set_concolic_value(
+                            self.variable_name.clone(),
+                            $crate::expressions::ConstValue::$const_variant(value),
+                        );
+                    }
+                });
             }
 
             /// Update concrete value from a model (for concolic execution)
             /// Returns true if the value was updated
-            pub fn update_from_model(&mut self, model: &$crate::solver::Model) -> bool {
+            pub fn update_from_model(&self, model: &$crate::solver::Model) -> bool {
                 if let Some(value) = model.$model_getter(&self.variable_name) {
-                    self.concrete_value = Some(value);
+                    self.concrete_value.set(Some(value));
                     true
                 } else {
                     false
@@ -350,18 +424,32 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_add(b)),
                     _ => None,
                 };
 
+                let variable_name = {
+                    let mgr = self.manager.lock().unwrap();
+                    mgr.fresh_variable($type_name)
+                };
+
+                // Add constraint that defines this variable in terms of the expression
+                // This ensures the solver knows: variable_name == self + rhs
+                {
+                    let mut mgr = self.manager.lock().unwrap();
+                    let defining_constraint = $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Eq,
+                        $crate::expressions::SymExpr::Variable(variable_name.clone()),
+                        expr.clone(),
+                    );
+                    let _ = mgr.add_constraint(defining_constraint);
+                }
+
                 $sym_type {
-                    variable_name: {
-                        let mgr = self.manager.lock().unwrap();
-                        mgr.fresh_variable($type_name)
-                    },
+                    variable_name,
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -377,18 +465,31 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_add(b)),
                     _ => None,
                 };
 
+                let variable_name = {
+                    let mgr = self.manager.lock().unwrap();
+                    mgr.fresh_variable($type_name)
+                };
+
+                // Add constraint that defines this variable in terms of the expression
+                {
+                    let mut mgr = self.manager.lock().unwrap();
+                    let defining_constraint = $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Eq,
+                        $crate::expressions::SymExpr::Variable(variable_name.clone()),
+                        expr.clone(),
+                    );
+                    let _ = mgr.add_constraint(defining_constraint);
+                }
+
                 $sym_type {
-                    variable_name: {
-                        let mgr = self.manager.lock().unwrap();
-                        mgr.fresh_variable($type_name)
-                    },
+                    variable_name,
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -404,7 +505,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_sub(b)),
                     _ => None,
                 };
@@ -415,7 +516,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -430,7 +531,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_sub(b)),
                     _ => None,
                 };
@@ -441,7 +542,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -457,7 +558,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_mul(b)),
                     _ => None,
                 };
@@ -468,7 +569,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -483,7 +584,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a.wrapping_mul(b)),
                     _ => None,
                 };
@@ -494,7 +595,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -510,7 +611,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if b != 0 => Some(a / b),
                     _ => None,
                 };
@@ -521,7 +622,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -536,7 +637,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if b != 0 => Some(a / b),
                     _ => None,
                 };
@@ -547,7 +648,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -563,7 +664,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if b != 0 => Some(a % b),
                     _ => None,
                 };
@@ -574,7 +675,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -589,7 +690,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if b != 0 => Some(a % b),
                     _ => None,
                 };
@@ -600,7 +701,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -616,7 +717,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a & b),
                     _ => None,
                 };
@@ -627,7 +728,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -642,7 +743,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a & b),
                     _ => None,
                 };
@@ -653,7 +754,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -669,7 +770,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a | b),
                     _ => None,
                 };
@@ -680,7 +781,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -695,7 +796,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a | b),
                     _ => None,
                 };
@@ -706,7 +807,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -722,7 +823,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a ^ b),
                     _ => None,
                 };
@@ -733,7 +834,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -748,7 +849,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) => Some(a ^ b),
                     _ => None,
                 };
@@ -759,7 +860,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -775,7 +876,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if (b as u32) < $bit_width => Some(a << b),
                     _ => None,
                 };
@@ -786,7 +887,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -801,7 +902,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if (b as u32) < $bit_width => Some(a << b),
                     _ => None,
                 };
@@ -812,7 +913,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
@@ -828,7 +929,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if (b as u32) < $bit_width => Some(a >> b),
                     _ => None,
                 };
@@ -839,7 +940,7 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: self.manager,
                 }
             }
@@ -854,7 +955,7 @@ macro_rules! define_sym_int {
                     self.expr.clone(),
                     rhs.expr.clone(),
                 );
-                let concrete_value = match (self.concrete_value, rhs.concrete_value) {
+                let concrete_value = match (self.concrete_value.get(), rhs.concrete_value.get()) {
                     (Some(a), Some(b)) if (b as u32) < $bit_width => Some(a >> b),
                     _ => None,
                 };
@@ -865,55 +966,45 @@ macro_rules! define_sym_int {
                         mgr.fresh_variable($type_name)
                     },
                     expr,
-                    concrete_value,
+                    concrete_value: std::cell::Cell::new(concrete_value),
                     manager: std::sync::Arc::clone(&self.manager),
                 }
             }
         }
 
-        // PartialEq trait with path forking support
+        // PartialEq trait with replay-based branching support
         impl PartialEq for $sym_type {
             fn eq(&self, other: &Self) -> bool {
-                // If we're in symbolic mode, this creates a branch point
-                if $crate::symbolic_types::is_symbolic_mode() {
-                    // Check if we have a predetermined branch decision
-                    if let Some(decision) = $crate::symbolic_types::get_next_branch_decision() {
-                        // Add the appropriate constraint to the manager
-                        let constraint = if decision {
-                            self.eq_constraint(other)
-                        } else {
-                            self.ne_constraint(other)
-                        };
-
-                        // Add constraint and check satisfiability immediately
-                        let mut mgr = self.manager.lock().unwrap();
-                        let _ = mgr.add_constraint(constraint);
-
-                        // EAGER PATH PRUNING: Check if the path is still satisfiable
-                        if let Ok(is_sat) = mgr.is_satisfiable() {
-                            if !is_sat {
-                                drop(mgr);
-                                $crate::symbolic_types::mark_path_unsatisfiable();
-                                std::panic::panic_any($crate::UnsatPanic);
-                            }
-                        }
-
-                        return decision;
-                    }
-
-                    // No predetermined decision - use concrete result if available
-                    if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
+                // Non-exploration behavior: concrete if available, else structural.
+                if !$crate::runtime::is_exploring() {
+                    if let (Some(a), Some(b)) =
+                        (self.concrete_value.get(), other.concrete_value.get())
+                    {
                         return a == b;
                     }
-
-                    false
-                } else {
-                    // Not in symbolic mode - use concrete values if available
-                    if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-                        return a == b;
-                    }
-                    self.expr == other.expr
+                    return self.expr == other.expr;
                 }
+
+                let predicate = self.eq_constraint(other);
+                let concolic_choice = match (self.concrete_value(), other.concrete_value()) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => false,
+                };
+                let chosen = $crate::runtime::choose_branch(&predicate, concolic_choice);
+
+                let constraint = if chosen {
+                    predicate
+                } else {
+                    self.ne_constraint(other)
+                };
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+                let needs_refresh = chosen != concolic_choice;
+                drop(mgr);
+                if needs_refresh {
+                    let _ = $crate::runtime::refresh_concolic_from_model();
+                }
+                chosen
             }
         }
 
@@ -922,39 +1013,191 @@ macro_rules! define_sym_int {
         // PartialOrd and Ord traits
         impl PartialOrd for $sym_type {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
+                // If we have concrete values, use them
+                if let (Some(a), Some(b)) = (self.concrete_value.get(), other.concrete_value.get())
+                {
+                    return Some(a.cmp(&b));
+                }
+
+                // In exploration mode, we can't determine ordering without solving
+                // Return None to indicate ordering is unknown
+                if $crate::runtime::is_exploring() {
+                    None
+                } else {
+                    Some(self.variable_name.cmp(&other.variable_name))
+                }
+            }
+
+            // Override lt to trigger branching under exploration
+            fn lt(&self, other: &Self) -> bool {
+                if !$crate::runtime::is_exploring() {
+                    return match (self.concrete_value(), other.concrete_value()) {
+                        (Some(a), Some(b)) => a < b,
+                        _ => false,
+                    };
+                }
+
+                let predicate = $crate::expressions::SymExpr::binary_op(
+                    $crate::expressions::BinOp::Lt,
+                    self.expr.clone(),
+                    other.expr.clone(),
+                );
+                let concolic_choice = match (self.concrete_value(), other.concrete_value()) {
+                    (Some(a), Some(b)) => a < b,
+                    _ => false,
+                };
+                let chosen = $crate::runtime::choose_branch(&predicate, concolic_choice);
+                let constraint = if chosen {
+                    predicate
+                } else {
+                    $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Ge,
+                        self.expr.clone(),
+                        other.expr.clone(),
+                    )
+                };
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+                let needs_refresh = chosen != concolic_choice;
+                drop(mgr);
+                if needs_refresh {
+                    let _ = $crate::runtime::refresh_concolic_from_model();
+                }
+                chosen
+            }
+
+            // Override le to trigger branching under exploration
+            fn le(&self, other: &Self) -> bool {
+                if !$crate::runtime::is_exploring() {
+                    return match (self.concrete_value(), other.concrete_value()) {
+                        (Some(a), Some(b)) => a <= b,
+                        _ => false,
+                    };
+                }
+
+                let predicate = $crate::expressions::SymExpr::binary_op(
+                    $crate::expressions::BinOp::Le,
+                    self.expr.clone(),
+                    other.expr.clone(),
+                );
+                let concolic_choice = match (self.concrete_value(), other.concrete_value()) {
+                    (Some(a), Some(b)) => a <= b,
+                    _ => false,
+                };
+                let chosen = $crate::runtime::choose_branch(&predicate, concolic_choice);
+                let constraint = if chosen {
+                    predicate
+                } else {
+                    $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Gt,
+                        self.expr.clone(),
+                        other.expr.clone(),
+                    )
+                };
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+                let needs_refresh = chosen != concolic_choice;
+                drop(mgr);
+                if needs_refresh {
+                    let _ = $crate::runtime::refresh_concolic_from_model();
+                }
+                chosen
+            }
+
+            // Override gt to trigger branching under exploration
+            fn gt(&self, other: &Self) -> bool {
+                if !$crate::runtime::is_exploring() {
+                    return match (self.concrete_value(), other.concrete_value()) {
+                        (Some(a), Some(b)) => a > b,
+                        _ => false,
+                    };
+                }
+
+                let predicate = $crate::expressions::SymExpr::binary_op(
+                    $crate::expressions::BinOp::Gt,
+                    self.expr.clone(),
+                    other.expr.clone(),
+                );
+                let concolic_choice = match (self.concrete_value(), other.concrete_value()) {
+                    (Some(a), Some(b)) => a > b,
+                    _ => false,
+                };
+                let chosen = $crate::runtime::choose_branch(&predicate, concolic_choice);
+                let constraint = if chosen {
+                    predicate
+                } else {
+                    $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Le,
+                        self.expr.clone(),
+                        other.expr.clone(),
+                    )
+                };
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+                let needs_refresh = chosen != concolic_choice;
+                drop(mgr);
+                if needs_refresh {
+                    let _ = $crate::runtime::refresh_concolic_from_model();
+                }
+                chosen
+            }
+
+            // Override ge to trigger branching under exploration
+            fn ge(&self, other: &Self) -> bool {
+                if !$crate::runtime::is_exploring() {
+                    return match (self.concrete_value(), other.concrete_value()) {
+                        (Some(a), Some(b)) => a >= b,
+                        _ => false,
+                    };
+                }
+
+                let predicate = $crate::expressions::SymExpr::binary_op(
+                    $crate::expressions::BinOp::Ge,
+                    self.expr.clone(),
+                    other.expr.clone(),
+                );
+                let concolic_choice = match (self.concrete_value(), other.concrete_value()) {
+                    (Some(a), Some(b)) => a >= b,
+                    _ => false,
+                };
+                let chosen = $crate::runtime::choose_branch(&predicate, concolic_choice);
+                let constraint = if chosen {
+                    predicate
+                } else {
+                    $crate::expressions::SymExpr::binary_op(
+                        $crate::expressions::BinOp::Lt,
+                        self.expr.clone(),
+                        other.expr.clone(),
+                    )
+                };
+                let mut mgr = self.manager.lock().unwrap();
+                let _ = mgr.add_constraint(constraint);
+                let needs_refresh = chosen != concolic_choice;
+                drop(mgr);
+                if needs_refresh {
+                    let _ = $crate::runtime::refresh_concolic_from_model();
+                }
+                chosen
             }
         }
 
         impl Ord for $sym_type {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 // If we have concrete values, use them
-                if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
+                if let (Some(a), Some(b)) = (self.concrete_value.get(), other.concrete_value.get())
+                {
                     return a.cmp(&b);
                 }
 
-                // If we're in symbolic mode, comparisons create branch points
-                if $crate::symbolic_types::is_symbolic_mode() {
-                    if let (Some(a), Some(b)) = (self.concrete_value, other.concrete_value) {
-                        a.cmp(&b)
-                    } else {
-                        // Deterministic ordering based on variable names
-                        self.variable_name.cmp(&other.variable_name)
-                    }
-                } else {
-                    match (self.concrete_value, other.concrete_value) {
-                        (Some(a), Some(b)) => a.cmp(&b),
-                        _ => self.variable_name.cmp(&other.variable_name),
-                    }
-                }
+                // Fallback to variable name comparison
+                self.variable_name.cmp(&other.variable_name)
             }
         }
 
         // From concrete type
         impl From<$concrete_type> for $sym_type {
             fn from(value: $concrete_type) -> Self {
-                let manager = $crate::get_global_manager().expect("Failed to get global manager");
-                $sym_type::from_concrete(value, manager)
+                $sym_type::from_concrete(value)
             }
         }
 
@@ -963,7 +1206,10 @@ macro_rules! define_sym_int {
             type Error = &'static str;
 
             fn try_from(value: $sym_type) -> Result<Self, Self::Error> {
-                value.concrete_value.ok_or("No concrete value available")
+                value
+                    .concrete_value
+                    .get()
+                    .ok_or("No concrete value available")
             }
         }
 
@@ -971,7 +1217,10 @@ macro_rules! define_sym_int {
             type Error = &'static str;
 
             fn try_from(value: &$sym_type) -> Result<Self, Self::Error> {
-                value.concrete_value.ok_or("No concrete value available")
+                value
+                    .concrete_value
+                    .get()
+                    .ok_or("No concrete value available")
             }
         }
 
@@ -983,7 +1232,8 @@ macro_rules! define_sym_int {
         impl std::ops::Add<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn add(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self + rhs_sym
             }
         }
@@ -991,7 +1241,8 @@ macro_rules! define_sym_int {
         impl std::ops::Add<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn add(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self + &rhs_sym
             }
         }
@@ -999,7 +1250,8 @@ macro_rules! define_sym_int {
         impl std::ops::Add<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn add(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym + rhs
             }
         }
@@ -1007,7 +1259,8 @@ macro_rules! define_sym_int {
         impl std::ops::Add<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn add(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym + rhs
             }
         }
@@ -1016,7 +1269,8 @@ macro_rules! define_sym_int {
         impl std::ops::Sub<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn sub(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self - rhs_sym
             }
         }
@@ -1024,7 +1278,8 @@ macro_rules! define_sym_int {
         impl std::ops::Sub<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn sub(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self - &rhs_sym
             }
         }
@@ -1032,7 +1287,8 @@ macro_rules! define_sym_int {
         impl std::ops::Sub<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn sub(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym - rhs
             }
         }
@@ -1040,7 +1296,8 @@ macro_rules! define_sym_int {
         impl std::ops::Sub<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn sub(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym - rhs
             }
         }
@@ -1049,7 +1306,8 @@ macro_rules! define_sym_int {
         impl std::ops::Mul<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn mul(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self * rhs_sym
             }
         }
@@ -1057,7 +1315,8 @@ macro_rules! define_sym_int {
         impl std::ops::Mul<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn mul(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self * &rhs_sym
             }
         }
@@ -1065,7 +1324,8 @@ macro_rules! define_sym_int {
         impl std::ops::Mul<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn mul(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym * rhs
             }
         }
@@ -1073,7 +1333,8 @@ macro_rules! define_sym_int {
         impl std::ops::Mul<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn mul(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym * rhs
             }
         }
@@ -1082,7 +1343,8 @@ macro_rules! define_sym_int {
         impl std::ops::Div<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn div(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self / rhs_sym
             }
         }
@@ -1090,7 +1352,8 @@ macro_rules! define_sym_int {
         impl std::ops::Div<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn div(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self / &rhs_sym
             }
         }
@@ -1098,7 +1361,8 @@ macro_rules! define_sym_int {
         impl std::ops::Div<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn div(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym / rhs
             }
         }
@@ -1106,7 +1370,8 @@ macro_rules! define_sym_int {
         impl std::ops::Div<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn div(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym / rhs
             }
         }
@@ -1115,7 +1380,8 @@ macro_rules! define_sym_int {
         impl std::ops::Rem<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn rem(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self % rhs_sym
             }
         }
@@ -1123,7 +1389,8 @@ macro_rules! define_sym_int {
         impl std::ops::Rem<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn rem(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self % &rhs_sym
             }
         }
@@ -1131,7 +1398,8 @@ macro_rules! define_sym_int {
         impl std::ops::Rem<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn rem(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym % rhs
             }
         }
@@ -1139,7 +1407,8 @@ macro_rules! define_sym_int {
         impl std::ops::Rem<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn rem(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym % rhs
             }
         }
@@ -1148,7 +1417,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitAnd<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn bitand(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self & rhs_sym
             }
         }
@@ -1156,7 +1426,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitAnd<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn bitand(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self & &rhs_sym
             }
         }
@@ -1164,7 +1435,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitAnd<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitand(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym & rhs
             }
         }
@@ -1172,7 +1444,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitAnd<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitand(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym & rhs
             }
         }
@@ -1181,7 +1454,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitOr<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn bitor(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self | rhs_sym
             }
         }
@@ -1189,7 +1463,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitOr<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn bitor(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self | &rhs_sym
             }
         }
@@ -1197,7 +1472,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitOr<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitor(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym | rhs
             }
         }
@@ -1205,7 +1481,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitOr<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitor(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym | rhs
             }
         }
@@ -1214,7 +1491,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitXor<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn bitxor(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self ^ rhs_sym
             }
         }
@@ -1222,7 +1500,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitXor<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn bitxor(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self ^ &rhs_sym
             }
         }
@@ -1230,7 +1509,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitXor<$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitxor(self, rhs: $sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 lhs_sym ^ rhs
             }
         }
@@ -1238,7 +1518,8 @@ macro_rules! define_sym_int {
         impl std::ops::BitXor<&$sym_type> for $concrete_type {
             type Output = $sym_type;
             fn bitxor(self, rhs: &$sym_type) -> Self::Output {
-                let lhs_sym = $sym_type::from_concrete(self, std::sync::Arc::clone(&rhs.manager));
+                let lhs_sym =
+                    $sym_type::from_concrete_in(self, std::sync::Arc::clone(&rhs.manager));
                 &lhs_sym ^ rhs
             }
         }
@@ -1247,7 +1528,8 @@ macro_rules! define_sym_int {
         impl std::ops::Shl<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn shl(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self << rhs_sym
             }
         }
@@ -1255,7 +1537,8 @@ macro_rules! define_sym_int {
         impl std::ops::Shl<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn shl(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self << &rhs_sym
             }
         }
@@ -1264,7 +1547,8 @@ macro_rules! define_sym_int {
         impl std::ops::Shr<$concrete_type> for $sym_type {
             type Output = $sym_type;
             fn shr(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self >> rhs_sym
             }
         }
@@ -1272,7 +1556,8 @@ macro_rules! define_sym_int {
         impl std::ops::Shr<$concrete_type> for &$sym_type {
             type Output = $sym_type;
             fn shr(self, rhs: $concrete_type) -> Self::Output {
-                let rhs_sym = $sym_type::from_concrete(rhs, std::sync::Arc::clone(&self.manager));
+                let rhs_sym =
+                    $sym_type::from_concrete_in(rhs, std::sync::Arc::clone(&self.manager));
                 self >> &rhs_sym
             }
         }

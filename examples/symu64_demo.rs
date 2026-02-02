@@ -5,7 +5,6 @@
 
 use rust_project::symbolic_types::SymU64;
 use rust_project::{get_global_manager, init_global};
-use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== SymU64 Symbolic Execution Demo ===\n");
@@ -16,8 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create symbolic variables
     println!("Creating symbolic variables...");
-    let x = SymU64::new(Arc::clone(&manager));
-    let y = SymU64::new(Arc::clone(&manager));
+    let x = SymU64::new();
+    let y = SymU64::new();
     println!("  x: {}", x.variable_name());
     println!("  y: {}\n", y.variable_name());
 
@@ -29,13 +28,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let product = &x * &y;
     println!("  x * y = {:?}", product.expr());
 
-    let complex = (&x + &y) * SymU64::from_concrete(2, Arc::clone(&manager));
+    let complex = (&x + &y) * SymU64::from_concrete(2);
     println!("  (x + y) * 2 = {:?}\n", complex.expr());
 
     // Work with concrete values
     println!("Working with concrete values...");
-    let a = SymU64::from_concrete(10, Arc::clone(&manager));
-    let b = SymU64::from_concrete(20, Arc::clone(&manager));
+    let a = SymU64::from_concrete(10);
+    let b = SymU64::from_concrete(20);
     println!("  a = 10, b = 20");
 
     let result = &a + &b;

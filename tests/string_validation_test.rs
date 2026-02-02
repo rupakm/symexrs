@@ -2,7 +2,6 @@
 ///
 /// This test demonstrates that string operations are validated before being
 /// added as constraints to the manager.
-
 use rust_project::*;
 
 #[test]
@@ -24,7 +23,7 @@ fn test_string_validation_integration() {
         let start = SymExpr::Constant(ConstValue::I64(0));
         let length = SymExpr::Constant(ConstValue::I64(3));
         let substring = SymExpr::str_substring(s, start, length);
-        
+
         let expected = SymExpr::Constant(ConstValue::String("hel".to_string()));
         let constraint = SymExpr::binary_op(BinOp::Eq, substring, expected);
 
@@ -39,7 +38,7 @@ fn test_string_validation_integration() {
         let negative_index = SymExpr::Constant(ConstValue::I64(-1));
         let length = SymExpr::Constant(ConstValue::I64(2));
         let substring = SymExpr::str_substring(s, negative_index, length);
-        
+
         let expected = SymExpr::Constant(ConstValue::String("he".to_string()));
         let constraint = SymExpr::binary_op(BinOp::Eq, substring, expected);
 
@@ -58,7 +57,7 @@ fn test_string_validation_integration() {
         let empty_pattern = SymExpr::Constant(ConstValue::String("".to_string()));
         let replacement = SymExpr::Constant(ConstValue::String("x".to_string()));
         let replaced = SymExpr::str_replace(s, empty_pattern, replacement);
-        
+
         let expected = SymExpr::Constant(ConstValue::String("result".to_string()));
         let constraint = SymExpr::binary_op(BinOp::Eq, replaced, expected);
 
@@ -79,7 +78,10 @@ fn test_string_validation_integration() {
 
         let mut mgr = manager.lock().unwrap();
         let result = mgr.add_constraint(constraint);
-        assert!(result.is_err(), "Non-ASCII characters should fail validation");
+        assert!(
+            result.is_err(),
+            "Non-ASCII characters should fail validation"
+        );
         assert!(
             matches!(result.unwrap_err(), SymExError::NonAsciiCharacter { .. }),
             "Should return NonAsciiCharacter error"
@@ -114,14 +116,13 @@ fn test_string_validation_integration() {
 fn test_ascii_validation_in_symstring() {
     // Test that SymString constructors validate ASCII characters
     let _ = init_global();
-    let manager = get_global_manager().expect("Failed to get global manager");
 
     // Valid ASCII string should work
-    let s1 = SymString::from_concrete("Hello, World!", manager.clone());
+    let s1 = SymString::from_concrete("Hello, World!");
     assert_eq!(s1.concrete_value(), Some("Hello, World!"));
 
     // Valid ASCII string with special characters should work
-    let s2 = SymString::from_concrete("!@#$%^&*()", manager.clone());
+    let s2 = SymString::from_concrete("!@#$%^&*()");
     assert_eq!(s2.concrete_value(), Some("!@#$%^&*()"));
 }
 
@@ -130,10 +131,8 @@ fn test_ascii_validation_in_symstring() {
 fn test_ascii_validation_from_concrete_panics() {
     // Test that from_concrete panics on non-ASCII input
     let _ = init_global();
-    let manager = get_global_manager().expect("Failed to get global manager");
-    
     // This should panic
-    let _s = SymString::from_concrete("Hello, 世界!", manager);
+    let _s = SymString::from_concrete("Hello, 世界!");
 }
 
 #[test]
@@ -141,8 +140,6 @@ fn test_ascii_validation_from_concrete_panics() {
 fn test_ascii_validation_with_value_panics() {
     // Test that with_value panics on non-ASCII input
     let _ = init_global();
-    let manager = get_global_manager().expect("Failed to get global manager");
-    
     // This should panic
-    let _s = SymString::with_value("Hello, 世界!".to_string(), manager);
+    let _s = SymString::with_value("Hello, 世界!".to_string());
 }
