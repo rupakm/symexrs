@@ -3,6 +3,12 @@ name = "rust-project"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
+license = "Apache-2.0"
+author = ["Rupak Majumdar and Codex"]
+repository = "https://github.com/rupakm/symexrs"
+description = "Symexrs: A concolic execution engine for async Rust"
+keywords = ["symbolic execution", "testing"]
+categories = ["development-tools::testing"]
 
 [dependencies]
 z3 = "0.12"

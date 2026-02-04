@@ -5,9 +5,8 @@ A symbolic execution tool that uses Rust traits to enable seamless switching bet
 ## Features
 
 - **Trait-based symbolic types**: Drop-in replacements for concrete types (SymU64, SymI32, etc.)
-- **SMT solver integration**: Uses Z3 for constraint satisfiability and model generation
+- **SMT solver**: Uses Z3 for constraint satisfiability and model generation
 - **Replay-based path exploration**: Re-executes the closure with forced branch decisions; undecided branches follow concolic execution and record alternatives
-- **Property-based testing**: Comprehensive testing using QuickCheck
 
 ## Prerequisites
 
@@ -54,7 +53,7 @@ cargo test
 - `src/engine.rs` - Exploration engine and scheduling primitives
 - `src/manager.rs` - Constraint/variable manager + solver integration helpers
 - `src/solver.rs` - SMT solver interface and Z3 integration
-- `src/error.rs` - Comprehensive error handling
+- `src/error.rs` - Error handling
 
 ## Development Status
 
