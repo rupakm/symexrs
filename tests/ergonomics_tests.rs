@@ -1,4 +1,4 @@
-use rust_project::{explore_default, explore_with_manager, ExploreConfig, SymBool, SymU64};
+use symexrs::{explore_default, explore_with_manager, ExploreConfig, SymBool, SymU64};
 
 #[test]
 fn explore_default_requires_no_manager_args() {

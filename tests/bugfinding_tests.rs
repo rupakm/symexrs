@@ -1,4 +1,4 @@
-use rust_project::{explore_default, replay, ExploreConfig, SymU64};
+use symexrs::{explore_default, replay, ExploreConfig, SymU64};
 
 #[test]
 fn exploration_records_user_panics_as_bug_cases() {
@@ -50,6 +50,6 @@ fn bug_case_is_replayable_from_decisions_and_inputs() {
     })
     .unwrap();
 
-    assert_eq!(rr.outcome, rust_project::RunOutcome::PanickedUser);
+    assert_eq!(rr.outcome, symexrs::RunOutcome::PanickedUser);
     assert!(rr.panic_message.unwrap_or_default().contains("boom"));
 }

@@ -1,7 +1,7 @@
-use rust_project::{explore, ExploreConfig, SchedulerKind, SymU64};
+use symexrs::{explore, ExploreConfig, SchedulerKind, SymU64};
 
 fn run_two_completed_paths(cfg: ExploreConfig) -> Vec<Vec<bool>> {
-    use rust_project::runtime;
+    use symexrs::runtime;
     use std::sync::{Arc, Mutex};
 
     let log: Arc<Mutex<Vec<Vec<bool>>>> = Arc::new(Mutex::new(Vec::new()));

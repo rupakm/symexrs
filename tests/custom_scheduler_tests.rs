@@ -1,9 +1,9 @@
-use rust_project::scheduler::Scheduler;
-use rust_project::{explore_with_scheduler, ExploreConfig, SymU64};
+use symexrs::scheduler::Scheduler;
+use symexrs::{explore_with_scheduler, ExploreConfig, SymU64};
 
 // A tiny custom scheduler that always behaves like BFS.
 struct AlwaysBfs {
-    q: std::collections::VecDeque<rust_project::WorkItem>,
+    q: std::collections::VecDeque<symexrs::WorkItem>,
 }
 
 impl AlwaysBfs {
@@ -15,18 +15,18 @@ impl AlwaysBfs {
 }
 
 impl Scheduler for AlwaysBfs {
-    fn push(&mut self, work: rust_project::WorkItem) {
+    fn push(&mut self, work: symexrs::WorkItem) {
         self.q.push_back(work);
     }
 
-    fn pop(&mut self) -> Option<rust_project::WorkItem> {
+    fn pop(&mut self) -> Option<symexrs::WorkItem> {
         self.q.pop_front()
     }
 }
 
 #[test]
 fn explore_with_custom_scheduler_works() {
-    use rust_project::runtime;
+    use symexrs::runtime;
     use std::sync::{Arc, Mutex};
 
     let log: Arc<Mutex<Vec<Vec<bool>>>> = Arc::new(Mutex::new(Vec::new()));

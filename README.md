@@ -61,4 +61,4 @@ This project is under active development. The current focus is making the execut
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the Apache License.

@@ -4,7 +4,7 @@
 //! expressions to enable fast satisfiability checking without calling the
 //! SMT solver for every path.
 
-use rust_project::{solver::Z3Solver, symbolic_types::SymU64, SymExManager, SymExResult};
+use symexrs::{solver::Z3Solver, symbolic_types::SymU64, SymExManager, SymExResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

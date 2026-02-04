@@ -83,7 +83,7 @@
 //! - avoid adding new branching comparisons at the point where you are
 //!   checking the invariant.
 
-use rust_project::{explore_default, SymI32};
+use symexrs::{explore_default, SymI32};
 
 fn binary_search(arr: &[i32], elem: &SymI32) -> Option<usize> {
     let mut size = arr.len();

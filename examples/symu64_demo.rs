@@ -3,8 +3,8 @@
 //! This example shows how to use SymU64 for symbolic execution
 //! with arithmetic operations and constraint tracking.
 
-use rust_project::symbolic_types::SymU64;
-use rust_project::{get_global_manager, init_global};
+use symexrs::symbolic_types::SymU64;
+use symexrs::{get_global_manager, init_global};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== SymU64 Symbolic Execution Demo ===\n");

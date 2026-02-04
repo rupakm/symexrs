@@ -2,7 +2,7 @@
 ///
 /// This test demonstrates that string operations are validated before being
 /// added as constraints to the manager.
-use rust_project::*;
+use symexrs::*;
 
 #[test]
 fn test_string_validation_integration() {

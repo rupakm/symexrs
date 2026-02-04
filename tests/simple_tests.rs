@@ -1,4 +1,4 @@
-use rust_project::{explore_default, SymI32, SymU32, SymU64};
+use symexrs::{explore_default, SymI32, SymU32, SymU64};
 
 #[test]
 fn test_arith() {
