@@ -341,12 +341,12 @@ impl Z3Solver {
     /// We create solvers on-demand rather than storing them because
     /// Z3 solvers have lifetime constraints tied to the context.
     fn get_solver(&self) -> Solver {
-        let solver = Solver::new(&self.context);
+        
 
         // Configure timeout if set - timeout is configured at the context level
         // The solver inherits timeout settings from the context
 
-        solver
+        Solver::new(&self.context)
     }
 
     /// Check if a single constraint is satisfiable
@@ -536,6 +536,7 @@ impl Z3Solver {
     ///
     /// This method analyzes constraints to determine the likely type of each variable
     /// based on how it's used in the constraints.
+    #[allow(clippy::only_used_in_recursion)]
     fn infer_variable_types<'a>(&self, expr: &'a SymExpr, types: &mut HashMap<String, &'a str>) {
         match expr {
             SymExpr::Variable(_) => {
@@ -1080,7 +1081,7 @@ impl Z3Solver {
 
             _ => Err(SymExError::TypeMismatch {
                 expected: "string".to_string(),
-                found: format!("{:?}", expr),
+                found: format!("{expr:?}"),
             }),
         }
     }
@@ -2618,7 +2619,7 @@ mod tests {
         let mut constraints = Vec::new();
 
         for i in 0..20 {
-            let var_name = format!("x{}", i);
+            let var_name = format!("x{i}");
             let var = SymExpr::variable(var_name);
             let bound = SymExpr::constant(ConstValue::I64(i as i64));
             let constraint = SymExpr::binary_op(BinOp::Gt, var, bound);
@@ -2628,7 +2629,7 @@ mod tests {
         // Add sum constraint: sum of all variables should be > 500
         let mut sum_expr = SymExpr::variable("x0".to_string());
         for i in 1..20 {
-            let var_name = format!("x{}", i);
+            let var_name = format!("x{i}");
             let var = SymExpr::variable(var_name);
             sum_expr = SymExpr::binary_op(BinOp::Add, sum_expr, var);
         }

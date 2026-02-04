@@ -175,7 +175,7 @@ fn symex_test(good: bool) {
             println!("Exploration completed successfully with {} executions", res.runs_executed);
         }
         Err(e) => {
-            println!("Error during exploration: {:?}", e);
+            println!("Error during exploration: {e:?}");
         }
     }
 }

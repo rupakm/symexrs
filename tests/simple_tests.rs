@@ -47,17 +47,16 @@ fn test_path() {
 
         // Check if concrete value was updated
         if let Some(val) = target.concrete_value() {
-            println!("  Actual value: {}", val);
-            if val >= 1 && val <= 10 {
+            println!("  Actual value: {val}");
+            if (1..=10).contains(&val) {
                 println!("  ✓ Concrete value correctly updated!");
                 // Verify the value actually satisfies the constraints
                 assert!(
-                    val >= 1 && val <= 10,
-                    "Concrete value {} should be in [1, 10]",
-                    val
+                    (1..=10).contains(&val),
+                    "Concrete value {val} should be in [1, 10]"
                 );
             } else {
-                panic!("✗ Concrete value NOT updated correctly (got {})", val);
+                panic!("✗ Concrete value NOT updated correctly (got {val})");
             }
         } else {
             panic!("✗ No concrete value available");
@@ -90,7 +89,7 @@ fn test_path() {
             );
         }
         Err(e) => {
-            panic!("Error during exploration: {:?}", e);
+            panic!("Error during exploration: {e:?}");
         }
     }
 }

@@ -282,7 +282,7 @@ impl Explorer {
 
         set_current_runtime(Some(Arc::clone(&self.runtime)));
         let start = Instant::now();
-        let exec = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
+        let exec = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         let duration_ms = start.elapsed().as_millis();
         set_current_runtime(None);
 
@@ -395,7 +395,7 @@ impl Explorer {
         let mut total_run_time_ms: u128 = 0;
 
         while let Some(work) = self.scheduler.pop() {
-            if self.cfg.max_paths.map_or(false, |m| explored >= m) {
+            if self.cfg.max_paths.is_some_and(|m| explored >= m) {
                 break;
             }
             if work.forced.len() > self.cfg.max_depth {

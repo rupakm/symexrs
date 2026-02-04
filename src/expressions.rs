@@ -237,7 +237,7 @@ impl fmt::Display for ConstValue {
             ConstValue::U32(val) => write!(f, "{val}"),
             ConstValue::I32(val) => write!(f, "{val}"),
             ConstValue::F32(val) => write!(f, "{val}"),
-            ConstValue::String(val) => write!(f, "\"{}\"", val),
+            ConstValue::String(val) => write!(f, "\"{val}\""),
         }
     }
 }
@@ -675,16 +675,14 @@ impl SymExpr {
                 if let SymExpr::Constant(ConstValue::I64(n)) = start.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Substring start index {} must be non-negative",
-                            n
+                            "Substring start index {n} must be non-negative"
                         )));
                     }
                 }
                 if let SymExpr::Constant(ConstValue::I32(n)) = start.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Substring start index {} must be non-negative",
-                            n
+                            "Substring start index {n} must be non-negative"
                         )));
                     }
                 }
@@ -692,16 +690,14 @@ impl SymExpr {
                 if let SymExpr::Constant(ConstValue::I64(n)) = length.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Substring length {} must be non-negative",
-                            n
+                            "Substring length {n} must be non-negative"
                         )));
                     }
                 }
                 if let SymExpr::Constant(ConstValue::I32(n)) = length.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Substring length {} must be non-negative",
-                            n
+                            "Substring length {n} must be non-negative"
                         )));
                     }
                 }
@@ -765,16 +761,14 @@ impl SymExpr {
                 if let SymExpr::Constant(ConstValue::I64(n)) = index.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Character index {} must be non-negative",
-                            n
+                            "Character index {n} must be non-negative"
                         )));
                     }
                 }
                 if let SymExpr::Constant(ConstValue::I32(n)) = index.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Character index {} must be non-negative",
-                            n
+                            "Character index {n} must be non-negative"
                         )));
                     }
                 }
@@ -791,16 +785,14 @@ impl SymExpr {
                 if let SymExpr::Constant(ConstValue::I64(n)) = offset.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Index offset {} must be non-negative",
-                            n
+                            "Index offset {n} must be non-negative"
                         )));
                     }
                 }
                 if let SymExpr::Constant(ConstValue::I32(n)) = offset.as_ref() {
                     if *n < 0 {
                         return Err(crate::SymExError::InvalidStringOperation(format!(
-                            "Index offset {} must be non-negative",
-                            n
+                            "Index offset {n} must be non-negative"
                         )));
                     }
                 }
@@ -1157,7 +1149,7 @@ impl SymExpr {
                         BinOp::StrConcat,
                         SymExpr::Constant(ConstValue::String(a)),
                         SymExpr::Constant(ConstValue::String(b)),
-                    ) => SymExpr::constant(ConstValue::String(format!("{}{}", a, b))),
+                    ) => SymExpr::constant(ConstValue::String(format!("{a}{b}"))),
 
                     // String concatenation with empty string: s + "" = s, "" + s = s
                     (BinOp::StrConcat, expr, SymExpr::Constant(ConstValue::String(s)))
@@ -1807,7 +1799,7 @@ fn eval_ge(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
 fn eval_str_concat(left: ConstValue, right: ConstValue) -> Option<ConstValue> {
     match (left, right) {
         (ConstValue::String(a), ConstValue::String(b)) => {
-            Some(ConstValue::String(format!("{}{}", a, b)))
+            Some(ConstValue::String(format!("{a}{b}")))
         }
         _ => None,
     }
@@ -2220,8 +2212,8 @@ mod tests {
         match expr {
             SymExpr::BinaryOp(actual_op, actual_left, actual_right) => {
                 actual_op == op
-                    && expr_equal_with_nan(&*actual_left, &left)
-                    && expr_equal_with_nan(&*actual_right, &right)
+                    && expr_equal_with_nan(&actual_left, &left)
+                    && expr_equal_with_nan(&actual_right, &right)
             }
             _ => false,
         }
@@ -2235,7 +2227,7 @@ mod tests {
         // Verify the expression structure is correct
         match expr {
             SymExpr::UnaryOp(actual_op, actual_operand) => {
-                actual_op == op && expr_equal_with_nan(&*actual_operand, &operand)
+                actual_op == op && expr_equal_with_nan(&actual_operand, &operand)
             }
             _ => false,
         }
@@ -2274,9 +2266,9 @@ mod tests {
 
         match expr {
             SymExpr::Conditional(actual_cond, actual_then, actual_else) => {
-                expr_equal_with_nan(&*actual_cond, &cond)
-                    && expr_equal_with_nan(&*actual_then, &then_expr)
-                    && expr_equal_with_nan(&*actual_else, &else_expr)
+                expr_equal_with_nan(&actual_cond, &cond)
+                    && expr_equal_with_nan(&actual_then, &then_expr)
+                    && expr_equal_with_nan(&actual_else, &else_expr)
             }
             _ => false,
         }
@@ -2326,7 +2318,7 @@ mod tests {
         let const_expr = SymExpr::constant(ConstValue::U64(42));
         let add_expr = SymExpr::binary_op(BinOp::Add, var, const_expr);
 
-        let display_str = format!("{}", add_expr);
+        let display_str = format!("{add_expr}");
         assert!(display_str.contains("x"));
         assert!(display_str.contains("42"));
         assert!(display_str.contains("+"));
@@ -2517,7 +2509,7 @@ mod tests {
         // Each variable should appear in exactly one declaration
         // Use more precise matching to avoid substring issues
         for var in &variables {
-            let expected_decl = format!("(declare-fun {} () Int)", var);
+            let expected_decl = format!("(declare-fun {var} () Int)");
             let matching_decls = declarations
                 .iter()
                 .filter(|decl| **decl == expected_decl)

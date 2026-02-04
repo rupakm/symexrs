@@ -103,6 +103,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new() -> SymExResult<Arc<Self>> {
         let solver = Box::new(Z3Solver::new()?);
         let manager = Arc::new(Mutex::new(SymExManager::new(solver)));
@@ -175,6 +176,7 @@ impl Runtime {
         self.decisions.borrow().clone()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn next_decision_for_branch(
         &self,
         site_id: u64,
@@ -375,7 +377,7 @@ impl Runtime {
         output.push_str(&format!("  Mode: {:?}\n", cfg.mode));
         output.push_str(&format!("  Max new branches to record: {}\n", cfg.max_new_branches_to_record));
         if let Some(max) = cfg.max_total_branches {
-            output.push_str(&format!("  Max total branches: {}\n", max));
+            output.push_str(&format!("  Max total branches: {max}\n"));
         } else {
             output.push_str("  Max total branches: unlimited\n");
         }
@@ -394,7 +396,7 @@ impl Runtime {
             let mut sorted_inputs: Vec<_> = inputs.iter().collect();
             sorted_inputs.sort_by_key(|(k, _)| *k);
             for (name, value) in sorted_inputs {
-                output.push_str(&format!("  {} = {}\n", name, value));
+                output.push_str(&format!("  {name} = {value}\n"));
             }
         }
         drop(inputs); // Release borrow before locking manager
@@ -418,7 +420,7 @@ impl Runtime {
             output.push_str("  (no decisions taken)\n");
         } else {
             for (i, decision) in decisions.iter().enumerate() {
-                output.push_str(&format!("  [{}] {:?}\n", i, decision));
+                output.push_str(&format!("  [{i}] {decision:?}\n"));
             }
         }
         drop(decisions); // Release borrow

@@ -23,6 +23,12 @@ pub struct SymBool {
     manager: Arc<Mutex<SymExManager>>,
 }
 
+impl Default for SymBool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymBool {
     pub fn new() -> Self {
         let manager = crate::get_global_manager().expect("Failed to get global manager");
@@ -400,6 +406,12 @@ pub struct SymString {
     manager: Arc<Mutex<SymExManager>>,
 }
 
+impl Default for SymString {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymString {
     pub fn new() -> Self {
         let manager = crate::get_global_manager().expect("Failed to get global manager");
@@ -437,8 +449,7 @@ impl SymString {
         for (pos, ch) in value.chars().enumerate() {
             if !ch.is_ascii() {
                 panic!(
-                    "Non-ASCII character '{}' at position {} in string value",
-                    ch, pos
+                    "Non-ASCII character '{ch}' at position {pos} in string value"
                 );
             }
         }
@@ -467,8 +478,7 @@ impl SymString {
         for (pos, ch) in value.chars().enumerate() {
             if !ch.is_ascii() {
                 panic!(
-                    "Non-ASCII character '{}' at position {} in string value",
-                    ch, pos
+                    "Non-ASCII character '{ch}' at position {pos} in string value"
                 );
             }
         }

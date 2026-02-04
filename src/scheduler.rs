@@ -32,6 +32,12 @@ pub struct DfsScheduler {
     stack: Vec<WorkItem>,
 }
 
+impl Default for DfsScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DfsScheduler {
     pub fn new() -> Self {
         Self { stack: Vec::new() }
@@ -50,6 +56,12 @@ impl Scheduler for DfsScheduler {
 
 pub struct BfsScheduler {
     queue: VecDeque<WorkItem>,
+}
+
+impl Default for BfsScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BfsScheduler {
@@ -102,6 +114,12 @@ pub struct CoverageGuidedScheduler {
     heap: BinaryHeap<ScoredWork>,
     seen_sites: HashSet<u64>,
     seq: u64,
+}
+
+impl Default for CoverageGuidedScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CoverageGuidedScheduler {

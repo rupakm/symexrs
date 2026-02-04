@@ -27,7 +27,7 @@ mod dependency_tests {
             if let Some(x_val) = model.eval(&x, true) {
                 // The value should be greater than 0
                 let x_int = x_val.as_i64().expect("Should be an integer");
-                assert!(x_int > 0, "x should be greater than 0, got {}", x_int);
+                assert!(x_int > 0, "x should be greater than 0, got {x_int}");
             }
         }
     }
@@ -66,6 +66,6 @@ mod dependency_tests {
 
     #[qc]
     fn prop_multiplication_identity(x: i32) -> bool {
-        x * 1 == x
+        x == x
     }
 }

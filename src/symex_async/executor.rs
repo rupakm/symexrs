@@ -58,6 +58,12 @@ impl Ord for TimerEntry {
     }
 }
 
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Executor {
     pub fn new() -> Self {
         Self {

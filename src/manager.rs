@@ -397,7 +397,7 @@ impl SymExManager {
             for (name, type_info) in vars {
                 output.push_str(&format!("  {}: {}", name, type_info.type_name));
                 if let Some(width) = type_info.bit_width {
-                    output.push_str(&format!(" ({} bits", width));
+                    output.push_str(&format!(" ({width} bits"));
                     if type_info.is_signed {
                         output.push_str(", signed");
                     } else {
@@ -406,7 +406,7 @@ impl SymExManager {
                     output.push(')');
                 }
                 if let Some(site) = &type_info.creation_site {
-                    output.push_str(&format!(" [created at: {}]", site));
+                    output.push_str(&format!(" [created at: {site}]"));
                 }
                 output.push('\n');
             }
@@ -422,7 +422,7 @@ impl SymExManager {
             output.push_str("  (no constraints)\n");
         } else {
             for (i, constraint) in self.path_constraints.iter().enumerate() {
-                output.push_str(&format!("  [{}] {}\n", i, constraint));
+                output.push_str(&format!("  [{i}] {constraint}\n"));
             }
         }
         

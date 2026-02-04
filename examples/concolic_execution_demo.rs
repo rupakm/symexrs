@@ -122,7 +122,7 @@ fn main() -> SymExResult<()> {
         println!("   SMT solver found satisfying values:");
         for var in model.get_variables() {
             if let Some(val) = model.get_u64(&var) {
-                println!("     {} = {}", var, val);
+                println!("     {var} = {val}");
             }
         }
         println!();

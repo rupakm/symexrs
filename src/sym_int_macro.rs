@@ -41,6 +41,12 @@ macro_rules! define_sym_int {
             manager: std::sync::Arc<std::sync::Mutex<$crate::manager::SymExManager>>,
         }
 
+        impl Default for $sym_type {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl $sym_type {
             /// Create a new symbolic value in the current runtime.
             pub fn new() -> Self {
