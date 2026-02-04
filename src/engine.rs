@@ -4,13 +4,16 @@
 //! It relies on the runtime to consume forced decisions and to choose further
 //! branches concolically (by concrete execution).
 
+use crate::decision::Decision;
 use crate::error::SymExResult;
 use crate::expressions::ConstValue;
 use crate::runtime::{
     set_current_runtime, BranchRecord, RunAbort, Runtime, RuntimeConfig, RuntimeMode,
 };
-use std::collections::{HashMap, VecDeque};
+use crate::scheduler::{make_scheduler, Scheduler, SchedulerKind};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplorationStrategy {
@@ -37,7 +40,7 @@ impl Default for RunBudget {
 pub struct ExploreConfig {
     pub max_depth: usize,
     pub max_paths: Option<usize>,
-    pub strategy: ExplorationStrategy,
+    pub scheduler: SchedulerKind,
     pub budget: RunBudget,
     /// If true, call the SMT solver at path completion to classify SAT/UNSAT.
     pub check_sat_on_complete: bool,
@@ -48,10 +51,22 @@ impl Default for ExploreConfig {
         Self {
             max_depth: 100,
             max_paths: None,
-            strategy: ExplorationStrategy::DepthFirst,
+            scheduler: SchedulerKind::Dfs,
             budget: RunBudget::default(),
             check_sat_on_complete: true,
         }
+    }
+}
+
+impl ExploreConfig {
+    pub fn with_random_scheduler(mut self, seed: u64) -> Self {
+        self.scheduler = SchedulerKind::Random { seed };
+        self
+    }
+
+    pub fn with_coverage_guided_scheduler(mut self) -> Self {
+        self.scheduler = SchedulerKind::CoverageGuided;
+        self
     }
 }
 
@@ -71,7 +86,15 @@ impl ExploreConfig {
     }
 
     pub fn with_strategy(mut self, strategy: ExplorationStrategy) -> Self {
-        self.strategy = strategy;
+        self.scheduler = match strategy {
+            ExplorationStrategy::DepthFirst => SchedulerKind::Dfs,
+            ExplorationStrategy::BreadthFirst => SchedulerKind::Bfs,
+        };
+        self
+    }
+
+    pub fn with_scheduler(mut self, scheduler: SchedulerKind) -> Self {
+        self.scheduler = scheduler;
         self
     }
 
@@ -92,9 +115,10 @@ pub type WorkId = u64;
 pub struct WorkItem {
     pub id: WorkId,
     pub parent: Option<WorkId>,
-    pub forced: Vec<bool>,
+    pub forced: Vec<Decision>,
     pub inputs: HashMap<String, ConstValue>,
-    pub priority: f64,
+    pub fork_site_id: Option<u64>,
+    pub fork_branch_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,9 +140,17 @@ pub struct RunStats {
 pub struct RunResult {
     pub work_id: WorkId,
     pub outcome: RunOutcome,
-    pub decisions_taken: Vec<bool>,
+    /// Wall-clock time spent executing the user closure for this run.
+    pub duration_ms: u128,
+    /// If the run ended in a user panic or error, capture a message.
+    pub panic_message: Option<String>,
+    /// Best-effort backtrace (may be empty depending on environment).
+    pub backtrace: Option<String>,
+    pub decisions_taken: Vec<Decision>,
     pub branches: Vec<BranchRecord>,
     pub spawned: Vec<WorkItem>,
+    /// Concolic input store at the end of the run (may be updated by model repair).
+    pub final_inputs: HashMap<String, ConstValue>,
     pub is_sat: Option<bool>,
     pub stats: RunStats,
 }
@@ -134,22 +166,57 @@ pub struct ExplorationResult {
 #[derive(Debug, Clone)]
 pub struct ExploreResult {
     pub exploration_result: ExplorationResult,
+    /// Bug cases (user panics) discovered during exploration.
+    pub bugs: Vec<BugCase>,
+    /// Total number of runs executed (includes aborted/panicked runs).
+    pub runs_executed: usize,
+    /// Total wall-clock time in all runs.
+    pub total_run_time_ms: u128,
     pub completed: bool,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BugCase {
+    pub work: WorkItem,
+    pub decisions_taken: Vec<Decision>,
+    pub final_inputs: HashMap<String, ConstValue>,
+    pub branches: Vec<BranchRecord>,
+    pub panic_message: String,
+    pub backtrace: Option<String>,
 }
 
 pub struct Explorer {
     cfg: ExploreConfig,
     pub(crate) runtime: Arc<Runtime>,
     next_id: WorkId,
+    scheduler: Box<dyn Scheduler>,
 }
 
 impl Explorer {
     pub fn new(cfg: ExploreConfig) -> SymExResult<Self> {
+        let scheduler = make_scheduler(cfg.scheduler.clone());
         Ok(Self {
             cfg,
             runtime: Runtime::new()?,
             next_id: 1,
+            scheduler,
+        })
+    }
+
+    /// Create an explorer with a custom scheduler implementation.
+    ///
+    /// This keeps `ExploreConfig` ergonomic for the built-in schedulers while
+    /// allowing advanced users to provide a bespoke scheduler (MCTS/RL/etc.).
+    pub fn new_with_scheduler(
+        cfg: ExploreConfig,
+        scheduler: Box<dyn Scheduler>,
+    ) -> SymExResult<Self> {
+        Ok(Self {
+            cfg,
+            runtime: Runtime::new()?,
+            next_id: 1,
+            scheduler,
         })
     }
 
@@ -166,15 +233,18 @@ impl Explorer {
     fn make_child(
         &mut self,
         parent: WorkId,
-        forced: Vec<bool>,
+        forced: Vec<Decision>,
         inputs: &HashMap<String, ConstValue>,
+        fork_site_id: Option<u64>,
+        fork_branch_index: Option<usize>,
     ) -> WorkItem {
         WorkItem {
             id: self.alloc_id(),
             parent: Some(parent),
             forced,
             inputs: inputs.clone(),
-            priority: 0.0,
+            fork_site_id,
+            fork_branch_index,
         }
     }
 
@@ -186,9 +256,13 @@ impl Explorer {
             return Ok(RunResult {
                 work_id: work.id,
                 outcome: RunOutcome::AbortedBudget,
+                duration_ms: 0,
+                panic_message: None,
+                backtrace: None,
                 decisions_taken: Vec::new(),
                 branches: Vec::new(),
                 spawned: Vec::new(),
+                final_inputs: HashMap::new(),
                 is_sat: None,
                 stats: RunStats {
                     branches_seen: 0,
@@ -207,12 +281,30 @@ impl Explorer {
             .reset_for_run(work.forced.clone(), work.inputs.clone())?;
 
         set_current_runtime(Some(Arc::clone(&self.runtime)));
+        let start = Instant::now();
         let exec = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
+        let duration_ms = start.elapsed().as_millis();
         set_current_runtime(None);
+
+        fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+            if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            }
+        }
+
+        let mut panic_message_out: Option<String> = None;
+        let mut backtrace_out: Option<String> = None;
 
         let (outcome, user_ok) = match exec {
             Ok(Ok(())) => (RunOutcome::Completed, true),
-            Ok(Err(_e)) => (RunOutcome::PanickedUser, false),
+            Ok(Err(e)) => {
+                panic_message_out = Some(e.to_string());
+                (RunOutcome::PanickedUser, false)
+            }
             Err(payload) => {
                 if payload.downcast_ref::<RunAbort>().is_some() {
                     match *payload.downcast_ref::<RunAbort>().unwrap() {
@@ -220,7 +312,9 @@ impl Explorer {
                         RunAbort::PathUnsat => (RunOutcome::AbortedUnsat, true),
                     }
                 } else {
-                    // Treat user panics as a path outcome (useful for bug-finding).
+                    panic_message_out = Some(panic_message(&payload));
+                    let bt = std::backtrace::Backtrace::capture();
+                    backtrace_out = Some(format!("{bt}"));
                     (RunOutcome::PanickedUser, false)
                 }
             }
@@ -229,16 +323,23 @@ impl Explorer {
         let branches = self.runtime.branches_snapshot();
         let decisions_taken = self.runtime.decisions_taken();
         let inputs = self.runtime.inputs_snapshot();
-        let alt_indices = self.runtime.spawn_alternatives_snapshot();
+        let alternatives = self.runtime.spawn_alternatives_snapshot();
 
         let mut spawned = Vec::new();
-        for i in alt_indices {
-            if i >= decisions_taken.len() {
+        for alt in alternatives {
+            if alt.index >= decisions_taken.len() {
                 continue;
             }
-            let mut forced = decisions_taken[..=i].to_vec();
-            forced[i] = !forced[i];
-            spawned.push(self.make_child(work.id, forced, &inputs));
+            let mut forced = decisions_taken[..=alt.index].to_vec();
+            forced[alt.index] = alt.decision.clone();
+            let fork_site_id = Some(alt.fork_site_id);
+            spawned.push(self.make_child(
+                work.id,
+                forced,
+                &inputs,
+                fork_site_id,
+                alt.fork_branch_index,
+            ));
         }
 
         let forced_branches = branches.iter().filter(|b| b.was_forced).count();
@@ -254,9 +355,13 @@ impl Explorer {
         Ok(RunResult {
             work_id: work.id,
             outcome,
+            duration_ms,
+            panic_message: panic_message_out,
+            backtrace: backtrace_out,
             decisions_taken,
             branches,
             spawned,
+            final_inputs: inputs,
             is_sat,
             stats: RunStats {
                 branches_seen: concolic_branches + forced_branches,
@@ -275,21 +380,21 @@ impl Explorer {
             parent: None,
             forced: Vec::new(),
             inputs: HashMap::new(),
-            priority: 0.0,
+            fork_site_id: None,
+            fork_branch_index: None,
         };
 
-        let mut queue: VecDeque<WorkItem> = VecDeque::new();
-        queue.push_back(root);
+        self.scheduler.push(root);
 
         let mut explored = 0usize;
         let mut sat = 0usize;
         let mut unsat = 0usize;
         let mut max_depth = 0usize;
+        let mut bugs: Vec<BugCase> = Vec::new();
+        let mut runs_executed = 0usize;
+        let mut total_run_time_ms: u128 = 0;
 
-        while let Some(work) = match self.cfg.strategy {
-            ExplorationStrategy::DepthFirst => queue.pop_back(),
-            ExplorationStrategy::BreadthFirst => queue.pop_front(),
-        } {
+        while let Some(work) = self.scheduler.pop() {
             if self.cfg.max_paths.map_or(false, |m| explored >= m) {
                 break;
             }
@@ -298,12 +403,30 @@ impl Explorer {
             }
 
             let rr = self.run_one(&work, &f)?;
+            runs_executed += 1;
+            total_run_time_ms = total_run_time_ms.saturating_add(rr.duration_ms);
             max_depth = max_depth.max(rr.decisions_taken.len());
+
+            // Let the scheduler learn from this run before pushing children.
+            self.scheduler.on_run_result(&work, &rr);
 
             // Always enqueue spawned continuations.
             for s in rr.spawned {
                 if s.forced.len() <= self.cfg.max_depth {
-                    queue.push_back(s);
+                    self.scheduler.push(s);
+                }
+            }
+
+            if rr.outcome == RunOutcome::PanickedUser {
+                if let Some(msg) = rr.panic_message.clone() {
+                    bugs.push(BugCase {
+                        work: work.clone(),
+                        decisions_taken: rr.decisions_taken.clone(),
+                        final_inputs: rr.final_inputs.clone(),
+                        branches: rr.branches.clone(),
+                        panic_message: msg,
+                        backtrace: rr.backtrace.clone(),
+                    });
                 }
             }
 
@@ -324,13 +447,33 @@ impl Explorer {
                 unsatisfiable_paths: unsat,
                 max_depth_reached: max_depth,
             },
+            bugs,
+            runs_executed,
+            total_run_time_ms,
             completed: true,
             error: None,
         })
     }
 }
 
+pub fn replay<F>(work: WorkItem, cfg: ExploreConfig, f: F) -> SymExResult<RunResult>
+where
+    F: Fn() -> SymExResult<()>,
+{
+    let mut ex = Explorer::new(cfg)?;
+    ex.run_one(&work, &f)
+}
+
 pub fn explore(cfg: ExploreConfig, f: impl Fn() -> SymExResult<()>) -> SymExResult<ExploreResult> {
     let mut ex = Explorer::new(cfg)?;
+    ex.explore(f)
+}
+
+pub fn explore_with_scheduler(
+    cfg: ExploreConfig,
+    scheduler: Box<dyn Scheduler>,
+    f: impl Fn() -> SymExResult<()>,
+) -> SymExResult<ExploreResult> {
+    let mut ex = Explorer::new_with_scheduler(cfg, scheduler)?;
     ex.explore(f)
 }

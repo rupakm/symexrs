@@ -3,6 +3,7 @@
 //! This module centralizes the per-run state needed by the symbolic types and
 //! the exploration engine.
 
+use crate::decision::Decision;
 use crate::error::SymExResult;
 use crate::expressions::ConstValue;
 use crate::expressions::SymExpr;
@@ -41,11 +42,30 @@ impl Default for RuntimeConfig {
 
 #[derive(Debug, Clone)]
 pub struct BranchRecord {
-    pub index: usize,
+    /// Index in the unified decision stream.
+    pub decision_index: usize,
+    /// Stable identifier for the branch site (call location).
+    pub site_id: u64,
+    pub site_file: String,
+    pub site_line: u32,
+    pub site_column: u32,
     pub chosen: bool,
     pub was_forced: bool,
     pub predicate_hash: u64,
     pub vars: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduleRecord {
+    /// Index in the unified decision stream.
+    pub decision_index: usize,
+    pub site_id: u64,
+    pub site_file: String,
+    pub site_line: u32,
+    pub site_column: u32,
+    pub arity: u32,
+    pub chosen_index: u32,
+    pub was_forced: bool,
 }
 
 #[derive(Debug)]
@@ -54,21 +74,32 @@ pub enum RunAbort {
     PathUnsat,
 }
 
+#[derive(Debug, Clone)]
+pub struct AlternativeDecision {
+    pub index: usize,
+    pub decision: Decision,
+    pub fork_site_id: u64,
+    pub fork_branch_index: Option<usize>,
+}
+
 /// Central runtime object shared by symbolic values.
 pub struct Runtime {
     pub(crate) manager: Arc<Mutex<SymExManager>>,
     config: RefCell<RuntimeConfig>,
 
-    forced_decisions: RefCell<Vec<bool>>,
-    branch_index: Cell<usize>,
+    forced_decisions: RefCell<Vec<Decision>>,
+    decision_index: Cell<usize>,
+    decisions: RefCell<Vec<Decision>>,
+    branch_ordinal: Cell<usize>,
 
     // Concolic seed inputs for this run.
     inputs: RefCell<HashMap<String, ConstValue>>,
 
     // Branch trace for the current run.
     branches: RefCell<Vec<BranchRecord>>,
-    // Indices of branches for which we should spawn the alternative work item.
-    spawn_alternatives_for: RefCell<Vec<usize>>,
+    schedules: RefCell<Vec<ScheduleRecord>>,
+    // Alternative decisions to spawn as new work.
+    spawn_alternatives: RefCell<Vec<AlternativeDecision>>,
 }
 
 impl Runtime {
@@ -79,10 +110,13 @@ impl Runtime {
             manager,
             config: RefCell::new(RuntimeConfig::default()),
             forced_decisions: RefCell::new(Vec::new()),
-            branch_index: Cell::new(0),
+            decision_index: Cell::new(0),
+            decisions: RefCell::new(Vec::new()),
+            branch_ordinal: Cell::new(0),
             inputs: RefCell::new(HashMap::new()),
             branches: RefCell::new(Vec::new()),
-            spawn_alternatives_for: RefCell::new(Vec::new()),
+            schedules: RefCell::new(Vec::new()),
+            spawn_alternatives: RefCell::new(Vec::new()),
         }))
     }
 
@@ -100,14 +134,17 @@ impl Runtime {
 
     pub fn reset_for_run(
         &self,
-        forced_decisions: Vec<bool>,
+        forced_decisions: Vec<Decision>,
         inputs: HashMap<String, ConstValue>,
     ) -> SymExResult<()> {
-        self.branch_index.set(0);
+        self.decision_index.set(0);
+        self.branch_ordinal.set(0);
         *self.forced_decisions.borrow_mut() = forced_decisions;
         *self.inputs.borrow_mut() = inputs;
+        self.decisions.borrow_mut().clear();
         self.branches.borrow_mut().clear();
-        self.spawn_alternatives_for.borrow_mut().clear();
+        self.schedules.borrow_mut().clear();
+        self.spawn_alternatives.borrow_mut().clear();
 
         let mut mgr = self.manager.lock().unwrap();
         mgr.reset()?;
@@ -126,16 +163,24 @@ impl Runtime {
         self.branches.borrow().clone()
     }
 
-    pub fn spawn_alternatives_snapshot(&self) -> Vec<usize> {
-        self.spawn_alternatives_for.borrow().clone()
+    pub fn schedules_snapshot(&self) -> Vec<ScheduleRecord> {
+        self.schedules.borrow().clone()
     }
 
-    pub fn decisions_taken(&self) -> Vec<bool> {
-        self.branches.borrow().iter().map(|b| b.chosen).collect()
+    pub fn spawn_alternatives_snapshot(&self) -> Vec<AlternativeDecision> {
+        self.spawn_alternatives.borrow().clone()
+    }
+
+    pub fn decisions_taken(&self) -> Vec<Decision> {
+        self.decisions.borrow().clone()
     }
 
     pub fn next_decision_for_branch(
         &self,
+        site_id: u64,
+        site_file: String,
+        site_line: u32,
+        site_column: u32,
         predicate_hash: u64,
         vars: Vec<String>,
         concolic_choice: bool,
@@ -145,7 +190,7 @@ impl Runtime {
             return concolic_choice;
         }
 
-        let idx = self.branch_index.get();
+        let idx = self.decision_index.get();
 
         if let Some(max) = cfg.max_total_branches {
             if idx >= max {
@@ -154,16 +199,27 @@ impl Runtime {
         }
 
         let forced = self.forced_decisions.borrow();
-        let (chosen, was_forced) = if let Some(d) = forced.get(idx).copied() {
-            (d, true)
+        let (chosen, was_forced) = if let Some(d) = forced.get(idx).cloned() {
+            match d {
+                Decision::Bool(b) => (b, true),
+                _ => (concolic_choice, false),
+            }
         } else {
             (concolic_choice, false)
         };
         drop(forced);
 
+        self.decisions.borrow_mut().push(Decision::Bool(chosen));
+
+        let branch_ord = self.branch_ordinal.get();
+
         // Record branch.
         self.branches.borrow_mut().push(BranchRecord {
-            index: idx,
+            decision_index: idx,
+            site_id,
+            site_file,
+            site_line,
+            site_column,
             chosen,
             was_forced,
             predicate_hash,
@@ -172,17 +228,96 @@ impl Runtime {
 
         // If this branch wasn't forced, register its alternative for scheduling.
         if !was_forced {
-            let mut alts = self.spawn_alternatives_for.borrow_mut();
-            let already = alts.len();
-            if already < cfg.max_new_branches_to_record {
-                alts.push(idx);
+            let mut alts = self.spawn_alternatives.borrow_mut();
+            if alts.len() < cfg.max_new_branches_to_record {
+                alts.push(AlternativeDecision {
+                    index: idx,
+                    decision: Decision::Bool(!chosen),
+                    fork_site_id: site_id,
+                    fork_branch_index: Some(branch_ord),
+                });
             } else {
                 std::panic::panic_any(RunAbort::BudgetReached);
             }
         }
 
-        self.branch_index.set(idx + 1);
+        self.decision_index.set(idx + 1);
+        self.branch_ordinal.set(branch_ord + 1);
         chosen
+    }
+
+    pub fn next_decision_for_choice(
+        &self,
+        site_id: u64,
+        site_file: String,
+        site_line: u32,
+        site_column: u32,
+        arity: u32,
+        concolic_index: u32,
+    ) -> u32 {
+        let cfg = self.config.borrow().clone();
+        if cfg.mode != RuntimeMode::Explore {
+            return concolic_index;
+        }
+
+        let idx = self.decision_index.get();
+
+        if let Some(max) = cfg.max_total_branches {
+            if idx >= max {
+                std::panic::panic_any(RunAbort::BudgetReached);
+            }
+        }
+
+        let forced = self.forced_decisions.borrow();
+        let (chosen_index, was_forced) = if let Some(d) = forced.get(idx).cloned() {
+            match d {
+                Decision::Choice { arity: a, index } if a == arity && index < arity => {
+                    (index, true)
+                }
+                _ => (concolic_index.min(arity.saturating_sub(1)), false),
+            }
+        } else {
+            (concolic_index.min(arity.saturating_sub(1)), false)
+        };
+        drop(forced);
+
+        self.decisions.borrow_mut().push(Decision::Choice {
+            arity,
+            index: chosen_index,
+        });
+
+        self.schedules.borrow_mut().push(ScheduleRecord {
+            decision_index: idx,
+            site_id,
+            site_file,
+            site_line,
+            site_column,
+            arity,
+            chosen_index,
+            was_forced,
+        });
+
+        if !was_forced {
+            let mut alts = self.spawn_alternatives.borrow_mut();
+            for j in 0..arity {
+                if j == chosen_index {
+                    continue;
+                }
+                if alts.len() < cfg.max_new_branches_to_record {
+                    alts.push(AlternativeDecision {
+                        index: idx,
+                        decision: Decision::Choice { arity, index: j },
+                        fork_site_id: site_id,
+                        fork_branch_index: None,
+                    });
+                } else {
+                    std::panic::panic_any(RunAbort::BudgetReached);
+                }
+            }
+        }
+
+        self.decision_index.set(idx + 1);
+        chosen_index
     }
 
     pub fn concolic_value_for_var_u64(&self, name: &str) -> Option<u64> {
@@ -286,6 +421,7 @@ pub fn refresh_concolic_from_model() -> SymExResult<()> {
     })
 }
 
+#[track_caller]
 pub fn choose_branch(predicate: &SymExpr, concolic_choice: bool) -> bool {
     with_current_runtime(|rt| {
         if let Some(rt) = rt {
@@ -293,14 +429,53 @@ pub fn choose_branch(predicate: &SymExpr, concolic_choice: bool) -> bool {
             vars.sort();
             vars.dedup();
 
+            let loc = std::panic::Location::caller();
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             use std::hash::{Hash, Hasher};
-            format!("{predicate:?}").hash(&mut hasher);
-            let predicate_hash = hasher.finish();
+            loc.file().hash(&mut hasher);
+            loc.line().hash(&mut hasher);
+            loc.column().hash(&mut hasher);
+            let site_id = hasher.finish();
 
-            rt.next_decision_for_branch(predicate_hash, vars, concolic_choice)
+            let predicate_hash = predicate.canonical_hash();
+
+            rt.next_decision_for_branch(
+                site_id,
+                loc.file().to_string(),
+                loc.line(),
+                loc.column(),
+                predicate_hash,
+                vars,
+                concolic_choice,
+            )
         } else {
             concolic_choice
+        }
+    })
+}
+
+#[track_caller]
+pub fn choose_choice(arity: u32, concolic_index: u32) -> u32 {
+    with_current_runtime(|rt| {
+        if let Some(rt) = rt {
+            let loc = std::panic::Location::caller();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            use std::hash::{Hash, Hasher};
+            loc.file().hash(&mut hasher);
+            loc.line().hash(&mut hasher);
+            loc.column().hash(&mut hasher);
+            let site_id = hasher.finish();
+
+            rt.next_decision_for_choice(
+                site_id,
+                loc.file().to_string(),
+                loc.line(),
+                loc.column(),
+                arity,
+                concolic_index,
+            )
+        } else {
+            concolic_index
         }
     })
 }
@@ -320,10 +495,13 @@ pub fn set_global_manager(manager: Arc<Mutex<SymExManager>>) {
             manager,
             config: RefCell::new(RuntimeConfig::default()),
             forced_decisions: RefCell::new(Vec::new()),
-            branch_index: Cell::new(0),
+            decision_index: Cell::new(0),
+            decisions: RefCell::new(Vec::new()),
+            branch_ordinal: Cell::new(0),
             inputs: RefCell::new(HashMap::new()),
             branches: RefCell::new(Vec::new()),
-            spawn_alternatives_for: RefCell::new(Vec::new()),
+            schedules: RefCell::new(Vec::new()),
+            spawn_alternatives: RefCell::new(Vec::new()),
         });
 
         let mut tls = tls.borrow_mut();

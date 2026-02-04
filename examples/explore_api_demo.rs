@@ -3,7 +3,7 @@
 //! This example shows how to use the high-level `explore` function to
 //! symbolically execute code with various configurations.
 
-use rust_project::{explore, explore_default, ExplorationStrategy, ExploreConfig, SymU64};
+use rust_project::{explore, explore_default, ExploreConfig, SchedulerKind, SymU64};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Explore API Demo ===\n");
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("2. Custom configuration (DFS, max depth 50):");
     let config = ExploreConfig::new()
         .with_max_depth(50)
-        .with_strategy(ExplorationStrategy::DepthFirst);
+        .with_scheduler(SchedulerKind::Dfs);
 
     let result = explore(config, || {
         let a = SymU64::from_concrete(10);
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 3: Breadth-first search
     println!("3. Breadth-first search:");
     let config = ExploreConfig::new()
-        .with_strategy(ExplorationStrategy::BreadthFirst)
+        .with_scheduler(SchedulerKind::Bfs)
         .with_max_depth(30);
 
     let result = explore(config, || {

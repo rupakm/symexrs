@@ -8,11 +8,14 @@
 //! different forced branch decisions. For undecided branches it follows the
 //! current concrete (concolic) execution and records alternatives for scheduling.
 
+pub mod decision;
 pub mod engine;
 pub mod error;
 pub mod expressions;
 pub mod manager;
 pub mod runtime;
+pub mod scheduler;
+pub mod symex_async;
 pub mod solver;
 pub mod sym_int_macro;
 pub mod symbolic_types;
@@ -22,13 +25,15 @@ mod test_deps;
 
 use std::sync::{Arc, Mutex};
 
+pub use decision::Decision;
 pub use engine::{
-    ExplorationResult, ExplorationStrategy, ExploreConfig, ExploreResult, Explorer, RunBudget,
-    RunOutcome, RunResult, WorkItem,
+    BugCase, ExplorationResult, ExplorationStrategy, ExploreConfig, ExploreResult, Explorer,
+    RunBudget, RunOutcome, RunResult, WorkItem,
 };
 pub use error::{SymExError, SymExResult};
 pub use expressions::{BinOp, ConstValue, SymExpr, UnOp};
 pub use manager::{SymExManager, TypeInfo};
+pub use scheduler::{Scheduler, SchedulerKind};
 pub use solver::{Model, SatResult, SmtSolver, Z3Solver};
 pub use symbolic_types::{SymBool, SymI32, SymI64, SymString, SymU32, SymU64, SymU8};
 
@@ -67,9 +72,46 @@ pub fn explore(cfg: ExploreConfig, f: impl Fn() -> SymExResult<()>) -> SymExResu
     engine::explore(cfg, f)
 }
 
+/// Explore paths using a custom scheduler implementation.
+pub fn explore_with_scheduler(
+    cfg: ExploreConfig,
+    scheduler: Box<dyn Scheduler>,
+    f: impl Fn() -> SymExResult<()>,
+) -> SymExResult<ExploreResult> {
+    engine::explore_with_scheduler(cfg, scheduler, f)
+}
+
+/// Replay a specific `WorkItem` deterministically.
+pub fn replay(
+    work: WorkItem,
+    cfg: ExploreConfig,
+    f: impl Fn() -> SymExResult<()>,
+) -> SymExResult<RunResult> {
+    engine::replay(work, cfg, f)
+}
+
 /// Convenience wrapper for `explore` with default configuration.
 pub fn explore_default(f: impl Fn() -> SymExResult<()>) -> SymExResult<ExploreResult> {
     explore(ExploreConfig::default(), f)
+}
+
+pub fn explore_async<F, Fut>(cfg: ExploreConfig, f: F) -> SymExResult<ExploreResult>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = SymExResult<()>> + 'static,
+{
+    explore(cfg, move || {
+        let fut = f();
+        crate::symex_async::run(fut)
+    })
+}
+
+pub fn explore_async_default<F, Fut>(f: F) -> SymExResult<ExploreResult>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = SymExResult<()>> + 'static,
+{
+    explore_async(ExploreConfig::default(), f)
 }
 
 /// Backwards-compatible explore wrapper that passes a manager.
