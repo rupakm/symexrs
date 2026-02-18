@@ -365,27 +365,36 @@ impl Runtime {
     /// - Branch trace
     pub fn format_state(&self) -> String {
         let mut output = String::new();
-        
+
         output.push_str("╔═══════════════════════════════════════════════════════════════╗\n");
         output.push_str("║         SYMBOLIC EXECUTION ENGINE STATE                       ║\n");
         output.push_str("╚═══════════════════════════════════════════════════════════════╝\n\n");
-        
+
         // Runtime configuration
         let cfg = self.config.borrow();
         output.push_str("Runtime Configuration:\n");
         output.push_str("----------------------\n");
         output.push_str(&format!("  Mode: {:?}\n", cfg.mode));
-        output.push_str(&format!("  Max new branches to record: {}\n", cfg.max_new_branches_to_record));
+        output.push_str(&format!(
+            "  Max new branches to record: {}\n",
+            cfg.max_new_branches_to_record
+        ));
         if let Some(max) = cfg.max_total_branches {
             output.push_str(&format!("  Max total branches: {max}\n"));
         } else {
             output.push_str("  Max total branches: unlimited\n");
         }
         drop(cfg); // Release borrow before locking manager
-        output.push_str(&format!("  Current decision index: {}\n", self.decision_index.get()));
-        output.push_str(&format!("  Current branch ordinal: {}\n", self.branch_ordinal.get()));
+        output.push_str(&format!(
+            "  Current decision index: {}\n",
+            self.decision_index.get()
+        ));
+        output.push_str(&format!(
+            "  Current branch ordinal: {}\n",
+            self.branch_ordinal.get()
+        ));
         output.push('\n');
-        
+
         // Concrete input values
         output.push_str("Concrete Input Values:\n");
         output.push_str("----------------------\n");
@@ -401,7 +410,7 @@ impl Runtime {
         }
         drop(inputs); // Release borrow before locking manager
         output.push('\n');
-        
+
         // Symbolic state from manager
         if let Ok(mgr) = self.manager.try_lock() {
             output.push_str(&mgr.format_state());
@@ -411,7 +420,7 @@ impl Runtime {
             output.push_str("  (manager is currently locked)\n");
         }
         output.push('\n');
-        
+
         // Decision trace
         output.push_str("Decision Trace:\n");
         output.push_str("---------------\n");
@@ -425,7 +434,7 @@ impl Runtime {
         }
         drop(decisions); // Release borrow
         output.push('\n');
-        
+
         // Branch trace
         output.push_str("Branch Trace:\n");
         output.push_str("-------------\n");
@@ -434,8 +443,10 @@ impl Runtime {
             output.push_str("  (no branches taken)\n");
         } else {
             for (i, branch) in branches.iter().enumerate() {
-                output.push_str(&format!("  [{}] {}:{}:{} - ", 
-                    i, branch.site_file, branch.site_line, branch.site_column));
+                output.push_str(&format!(
+                    "  [{}] {}:{}:{} - ",
+                    i, branch.site_file, branch.site_line, branch.site_column
+                ));
                 output.push_str(&format!("chose {}, ", branch.chosen));
                 if branch.was_forced {
                     output.push_str("forced");
@@ -450,7 +461,7 @@ impl Runtime {
         }
         drop(branches); // Release borrow
         output.push('\n');
-        
+
         // Alternative decisions to spawn
         output.push_str("Alternative Decisions (to spawn):\n");
         output.push_str("----------------------------------\n");
@@ -459,15 +470,17 @@ impl Runtime {
             output.push_str("  (no alternatives)\n");
         } else {
             for (i, alt) in alts.iter().enumerate() {
-                output.push_str(&format!("  [{}] At decision index {}: {:?}\n", 
-                    i, alt.index, alt.decision));
+                output.push_str(&format!(
+                    "  [{}] At decision index {}: {:?}\n",
+                    i, alt.index, alt.decision
+                ));
             }
         }
-        
+
         output.push_str("\n╔═══════════════════════════════════════════════════════════════╗\n");
         output.push_str("║                    END OF STATE                               ║\n");
         output.push_str("╚═══════════════════════════════════════════════════════════════╝\n");
-        
+
         output
     }
 

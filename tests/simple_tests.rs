@@ -1,4 +1,4 @@
-use symexrs::{explore_default, SymI32, SymU32, SymU64};
+use symexrs::{SymI32, SymU32, SymU64, explore_default};
 
 #[test]
 fn test_arith() {
@@ -151,17 +151,18 @@ fn symu64_membership_over_concrete_array() {
 
 #[test]
 fn no_sym() {
-        let res = explore_default(|| {
-            let a = 10;
-            let b = 20;
-            if a == b {
-                unreachable!();
-            }
+    let res = explore_default(|| {
+        let a = 10;
+        let b = 20;
+        if a == b {
+            unreachable!();
+        }
 
-            if a != b - 10 {
-                unreachable!();
-            }
-            Ok(())
-        }).unwrap();
-        assert!(res.runs_executed==1);
+        if a != b - 10 {
+            unreachable!();
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(res.runs_executed == 1);
 }

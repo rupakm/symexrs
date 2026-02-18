@@ -3,7 +3,7 @@
 //! This example shows how to use the high-level `explore` function to
 //! symbolically execute code with various configurations.
 
-use symexrs::{explore, explore_default, ExploreConfig, SchedulerKind, SymU64};
+use symexrs::{ExploreConfig, SchedulerKind, SymU64, explore, explore_default};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Explore API Demo ===\n");

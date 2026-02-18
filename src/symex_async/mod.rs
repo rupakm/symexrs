@@ -6,8 +6,8 @@
 //! - provides deterministic time and channels
 //! - surfaces scheduling choices to the symex runtime (`Decision::Choice`)
 
+pub mod channel;
 mod executor;
 pub mod time;
-pub mod channel;
 
-pub use executor::{run, spawn, yield_now, Executor, JoinHandle};
+pub use executor::{Executor, JoinHandle, run, spawn, yield_now};

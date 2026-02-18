@@ -1,5 +1,5 @@
 use symexrs::scheduler::Scheduler;
-use symexrs::{explore_with_scheduler, ExploreConfig, SymU64};
+use symexrs::{ExploreConfig, SymU64, explore_with_scheduler};
 
 // A tiny custom scheduler that always behaves like BFS.
 struct AlwaysBfs {
@@ -26,8 +26,8 @@ impl Scheduler for AlwaysBfs {
 
 #[test]
 fn explore_with_custom_scheduler_works() {
-    use symexrs::runtime;
     use std::sync::{Arc, Mutex};
+    use symexrs::runtime;
 
     let log: Arc<Mutex<Vec<Vec<bool>>>> = Arc::new(Mutex::new(Vec::new()));
     let log2 = Arc::clone(&log);

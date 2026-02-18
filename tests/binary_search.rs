@@ -83,7 +83,7 @@
 //! - avoid adding new branching comparisons at the point where you are
 //!   checking the invariant.
 
-use symexrs::{explore_default, SymI32};
+use symexrs::{SymI32, explore_default};
 
 fn binary_search(arr: &[i32], elem: &SymI32) -> Option<usize> {
     let mut size = arr.len();
@@ -132,10 +132,7 @@ fn binary_search_nonterminating(arr: &[i32], elem: &SymI32) -> Option<usize> {
 }
 
 fn get_symbolic_array() -> [i32; 4] {
-    [
-        1, 2,
-        3, 4,
-    ]
+    [1, 2, 3, 4]
 }
 
 fn symex_test(good: bool) {
@@ -172,7 +169,10 @@ fn symex_test(good: bool) {
 
     match result {
         Ok(res) => {
-            println!("Exploration completed successfully with {} executions", res.runs_executed);
+            println!(
+                "Exploration completed successfully with {} executions",
+                res.runs_executed
+            );
         }
         Err(e) => {
             println!("Error during exploration: {e:?}");

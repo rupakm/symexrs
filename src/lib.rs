@@ -8,6 +8,8 @@
 //! different forced branch decisions. For undecided branches it follows the
 //! current concrete (concolic) execution and records alternatives for scheduling.
 
+pub mod coverage;
+pub mod coverage_source_map;
 pub mod decision;
 pub mod engine;
 pub mod error;
@@ -15,16 +17,21 @@ pub mod expressions;
 pub mod manager;
 pub mod runtime;
 pub mod scheduler;
-pub mod symex_async;
 pub mod solver;
 pub mod sym_int_macro;
 pub mod symbolic_types;
+pub mod symex_async;
 
 #[cfg(test)]
 mod test_deps;
 
 use std::sync::{Arc, Mutex};
 
+pub use coverage::{
+    CountReward, CoverageDelta, CoverageStatus, CoverageTracker, RarityReward, RarityTracker,
+    RewardStrategy, is_coverage_available,
+};
+pub use coverage_source_map::SourceMapper;
 pub use decision::Decision;
 pub use engine::{
     BugCase, ExplorationResult, ExplorationStrategy, ExploreConfig, ExploreResult, Explorer,
@@ -35,7 +42,7 @@ pub use expressions::{BinOp, ConstValue, SymExpr, UnOp};
 pub use manager::{SymExManager, TypeInfo};
 pub use scheduler::{Scheduler, SchedulerKind};
 pub use solver::{Model, SatResult, SmtSolver, Z3Solver};
-pub use symbolic_types::{SymBool, SymI32, SymI64, SymString, SymU32, SymU64, SymU8};
+pub use symbolic_types::{SymBool, SymI32, SymI64, SymString, SymU8, SymU32, SymU64};
 
 /// Version information
 pub const VERSION: &str = "0.1.0";
@@ -140,7 +147,7 @@ where
 pub fn print_state() -> SymExResult<()> {
     // First try to get current runtime without nested borrows
     let rt_opt = runtime::with_current_runtime(|rt| rt.cloned());
-    
+
     if let Some(rt) = rt_opt {
         rt.print_state();
     } else {
@@ -165,7 +172,7 @@ pub fn print_state() -> SymExResult<()> {
 pub fn format_state() -> String {
     // First try to get current runtime without nested borrows
     let rt_opt = runtime::with_current_runtime(|rt| rt.cloned());
-    
+
     if let Some(rt) = rt_opt {
         rt.format_state()
     } else {

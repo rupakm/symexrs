@@ -8,8 +8,8 @@ use crate::error::{SymExError, SymExResult};
 use crate::expressions::{BinOp, ConstValue, SymExpr, UnOp};
 use std::collections::HashMap;
 use z3::{
-    ast::{Ast, Bool, Int},
     Config, Context, SatResult as Z3SatResult, Solver,
+    ast::{Ast, Bool, Int},
 };
 
 /// Result of a satisfiability query
@@ -341,8 +341,6 @@ impl Z3Solver {
     /// We create solvers on-demand rather than storing them because
     /// Z3 solvers have lifetime constraints tied to the context.
     fn get_solver(&self) -> Solver {
-        
-
         // Configure timeout if set - timeout is configured at the context level
         // The solver inherits timeout settings from the context
 

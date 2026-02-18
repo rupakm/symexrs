@@ -1,4 +1,4 @@
-use symexrs::{explore_default, replay, ExploreConfig, SymU64};
+use symexrs::{ExploreConfig, SymU64, explore_default, replay};
 
 #[test]
 fn exploration_records_user_panics_as_bug_cases() {

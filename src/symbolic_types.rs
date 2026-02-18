@@ -448,9 +448,7 @@ impl SymString {
     pub fn with_value_in(value: String, manager: Arc<Mutex<SymExManager>>) -> Self {
         for (pos, ch) in value.chars().enumerate() {
             if !ch.is_ascii() {
-                panic!(
-                    "Non-ASCII character '{ch}' at position {pos} in string value"
-                );
+                panic!("Non-ASCII character '{ch}' at position {pos} in string value");
             }
         }
 
@@ -477,9 +475,7 @@ impl SymString {
     pub fn from_concrete_in(value: &str, manager: Arc<Mutex<SymExManager>>) -> Self {
         for (pos, ch) in value.chars().enumerate() {
             if !ch.is_ascii() {
-                panic!(
-                    "Non-ASCII character '{ch}' at position {pos} in string value"
-                );
+                panic!("Non-ASCII character '{ch}' at position {pos} in string value");
             }
         }
 

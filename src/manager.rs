@@ -6,8 +6,8 @@
 use crate::error::{SymExError, SymExResult};
 use crate::expressions::SymExpr;
 use crate::solver::{Model, SatResult, SmtSolver};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -381,16 +381,16 @@ impl SymExManager {
     /// - Cache statistics
     pub fn format_state(&self) -> String {
         let mut output = String::new();
-        
+
         output.push_str("=== Symbolic Execution State ===\n\n");
-        
+
         // Output symbolic variables
         output.push_str("Symbolic Variables:\n");
         output.push_str("-------------------\n");
-        
+
         let mut vars: Vec<_> = self.variable_registry.iter().collect();
         vars.sort_by_key(|(name, _)| *name);
-        
+
         if vars.is_empty() {
             output.push_str("  (no variables registered)\n");
         } else {
@@ -411,13 +411,13 @@ impl SymExManager {
                 output.push('\n');
             }
         }
-        
+
         output.push('\n');
-        
+
         // Output path constraints
         output.push_str("Path Constraints:\n");
         output.push_str("-----------------\n");
-        
+
         if self.path_constraints.is_empty() {
             output.push_str("  (no constraints)\n");
         } else {
@@ -425,19 +425,22 @@ impl SymExManager {
                 output.push_str(&format!("  [{i}] {constraint}\n"));
             }
         }
-        
+
         output.push('\n');
-        
+
         // Output cache statistics
         let stats = self.get_cache_stats();
         output.push_str("Cache Statistics:\n");
         output.push_str("-----------------\n");
         output.push_str(&format!("  SAT cache entries: {}\n", stats.sat_cache_size));
-        output.push_str(&format!("  Model cache entries: {}\n", stats.model_cache_size));
+        output.push_str(&format!(
+            "  Model cache entries: {}\n",
+            stats.model_cache_size
+        ));
         output.push_str(&format!("  Cache hits: {}\n", stats.cache_hits));
         output.push_str(&format!("  Cache misses: {}\n", stats.cache_misses));
         output.push_str(&format!("  Hit rate: {:.2}%\n", stats.hit_rate * 100.0));
-        
+
         output
     }
 

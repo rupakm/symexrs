@@ -85,7 +85,11 @@ impl Executor {
         let mut inner = self.inner.lock().unwrap();
         let seq = inner.timer_seq;
         inner.timer_seq = inner.timer_seq.wrapping_add(1);
-        inner.timers.push(std::cmp::Reverse(TimerEntry { when_ms, seq, waker }));
+        inner.timers.push(std::cmp::Reverse(TimerEntry {
+            when_ms,
+            seq,
+            waker,
+        }));
     }
 
     pub fn spawn<Fut, T>(&self, fut: Fut) -> JoinHandle<T>
@@ -93,7 +97,10 @@ impl Executor {
         Fut: Future<Output = T> + 'static,
         T: 'static,
     {
-        let state: Arc<Mutex<JoinState<T>>> = Arc::new(Mutex::new(JoinState { result: None, waker: None }));
+        let state: Arc<Mutex<JoinState<T>>> = Arc::new(Mutex::new(JoinState {
+            result: None,
+            waker: None,
+        }));
         let state2 = Arc::clone(&state);
         let task_fut = async move {
             let out = fut.await;

@@ -4,9 +4,9 @@
 //! expressions to enable fast satisfiability checking without calling the
 //! SMT solver for every path.
 
-use symexrs::{solver::Z3Solver, symbolic_types::SymU64, SymExManager, SymExResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use symexrs::{SymExManager, SymExResult, solver::Z3Solver, symbolic_types::SymU64};
 
 fn main() -> SymExResult<()> {
     println!("=== Concolic Execution Demo ===\n");

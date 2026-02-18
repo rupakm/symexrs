@@ -8,9 +8,9 @@ use crate::decision::Decision;
 use crate::error::SymExResult;
 use crate::expressions::ConstValue;
 use crate::runtime::{
-    set_current_runtime, BranchRecord, RunAbort, Runtime, RuntimeConfig, RuntimeMode,
+    BranchRecord, RunAbort, Runtime, RuntimeConfig, RuntimeMode, set_current_runtime,
 };
-use crate::scheduler::{make_scheduler, Scheduler, SchedulerKind};
+use crate::scheduler::{Scheduler, SchedulerKind, make_scheduler};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
